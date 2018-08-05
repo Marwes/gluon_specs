@@ -14,9 +14,9 @@ extern crate specs;
 extern crate specs_derive;
 extern crate warmy;
 
-use ggez::*;
 use ggez::conf;
 use ggez::event;
+use ggez::*;
 
 use ggez::event::*;
 use ggez::graphics;

@@ -4,11 +4,11 @@ use ggez_goodies::scene;
 use specs::{self, Join};
 use warmy;
 
-use input;
 use components as c;
+use input;
+use resources;
 use scenes::*;
 use systems::*;
-use resources;
 use world::World;
 
 pub struct LevelScene {
@@ -28,11 +28,9 @@ impl LevelScene {
         LevelScene {
             done,
             kiwi,
-            dispatcher
+            dispatcher,
         }
     }
-
-
 
     fn register_systems() -> specs::Dispatcher<'static, 'static> {
         specs::DispatcherBuilder::new()
@@ -43,8 +41,7 @@ impl LevelScene {
 
 impl scene::Scene<World, input::InputEvent> for LevelScene {
     fn update(&mut self, gameworld: &mut World) -> FSceneSwitch {
-        self.dispatcher
-            .dispatch(&mut gameworld.specs_world.res);
+        self.dispatcher.dispatch(&mut gameworld.specs_world.res);
         if self.done {
             scene::SceneSwitch::Pop
         } else {

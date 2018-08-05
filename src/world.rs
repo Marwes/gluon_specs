@@ -4,16 +4,16 @@
 //! to every `Scene`: specs objects, input state, asset cache.
 
 use ggez;
-use ggez_goodies::input as ginput;
 use ggez::graphics::{Point2, Vector2};
+use ggez_goodies::input as ginput;
 use specs;
 
 use warmy;
 
 use std::path;
 
-use input;
 use components::*;
+use input;
 
 pub struct World {
     pub assets: warmy::Store<ggez::Context>,
@@ -63,8 +63,7 @@ impl World {
             .with(Motion {
                 velocity: Vector2::new(1.0, 1.0),
                 acceleration: Vector2::new(0.0, 0.0),
-            })
-            .build();
+            }).build();
 
         the_world
     }
