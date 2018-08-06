@@ -3,6 +3,8 @@ use std::collections::HashMap;
 
 use failure;
 
+use specs::{Builder, Join, ReadStorage, World};
+
 use shred::cell::{Ref, RefMut};
 use shred::{
     Accessor, AccessorCow, CastFrom, DispatcherBuilder, DynamicSystemData, MetaTable, Read,
@@ -295,46 +297,52 @@ fn create_script_sys(thread: &Thread, res: &Resources) -> DynamicSystem {
 
 pub fn main() -> Result<(), failure::Error> {
     /// Some resource
-    #[derive(Debug, Default, Getable, Pushable, Clone)]
+    #[derive(Debug, Default, Getable, Pushable, Clone, Component)]
     struct Pos {
         x: f64,
         y: f64,
     }
 
     /// Another resource
-    #[derive(Debug, Default, Getable, Pushable, Clone)]
+    #[derive(Debug, Default, Getable, Pushable, Clone, Component)]
     struct Bar;
 
     struct NormalSys;
 
     impl<'a> System<'a> for NormalSys {
-        type SystemData = (Read<'a, Pos>, Read<'a, Bar>);
+        type SystemData = (ReadStorage<'a, Pos>, ReadStorage<'a, Bar>);
 
         fn run(&mut self, (foo, bar): Self::SystemData) {
-            println!("Fetched foo: {:?}", &foo as &Pos);
-            println!("Fetched bar: {:?}", &bar as &Bar);
+            for (foo, bar) in (&foo, &bar).join() {
+                println!("Fetched foo: {:?}", &foo as &Pos);
+                println!("Fetched bar: {:?}", &bar as &Bar);
+            }
         }
     }
 
-    let mut res = Resources::new();
-
+    let mut world = World::new();
     {
-        let mut table = res.entry().or_insert_with(|| ReflectionTable::new());
+        let mut table = world.res.entry().or_insert_with(|| ReflectionTable::new());
 
         table.register(&Pos { x: 1., y: 2. });
         table.register(&Bar);
     }
 
     {
-        let mut table = res.entry().or_insert_with(|| ResourceTable::new());
+        let mut table = world.res.entry().or_insert_with(|| ResourceTable::new());
         table.register::<Pos>("pos");
         table.register::<Bar>("bar");
     }
+    world.register::<Pos>();
+    world.register::<Bar>();
+
+    world.create_entity().with(Pos { x: 1., y: 2. }).build();
+    world.create_entity().with(Pos { x: 1., y: 2. }).build();
 
     let mut dispatcher = DispatcherBuilder::new()
         .with(NormalSys, "normal", &[])
         .build();
-    dispatcher.setup(&mut res);
+    dispatcher.setup(&mut world.res);
 
     let vm = new_vm();
     let script = r#"
@@ -346,19 +354,19 @@ pub fn main() -> Result<(), failure::Error> {
     update
     "#;
     Compiler::new().load_script(&vm, "update", script)?;
-    let script0 = create_script_sys(&vm, &res);
+    let script0 = create_script_sys(&vm, &world.res);
 
     // it is recommended you create a second dispatcher dedicated to scripts,
     // that'll allow you to rebuild if necessary
     let mut scripts = DispatcherBuilder::new()
         .with(script0, "script0", &[])
         .build();
-    scripts.setup(&mut res);
+    scripts.setup(&mut world.res);
 
     // Game loop
     for _ in 0..3 {
-        dispatcher.dispatch(&res);
-        scripts.dispatch(&res);
+        dispatcher.dispatch(&mut world.res);
+        scripts.dispatch(&mut world.res);
     }
     Ok(())
 }
