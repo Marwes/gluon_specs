@@ -1,21 +1,32 @@
 // in a real application you would use `fnv`
 use std::collections::HashMap;
 
+use failure;
+
 use shred::cell::{Ref, RefMut};
 use shred::{
     Accessor, AccessorCow, CastFrom, DispatcherBuilder, DynamicSystemData, MetaTable, Read,
     Resource, ResourceId, Resources, System, SystemData,
 };
 
-use gluon::base::ArcType;
-use gluon::vm::api::{OwnedFunction, Pushable};
-use gluon::{new_vm, RootedThread, Thread};
+use gluon::{
+    base::types::ArcType,
+    new_vm,
+    vm::{
+        api::{Getable, Hole, OpaqueValue, OwnedFunction, Pushable, ValueRef},
+        internal::InternedStr,
+        thread::ThreadInternal,
+        Variants,
+    },
+    Compiler, RootedThread, Thread,
+};
 
 type GluonAny = OpaqueValue<RootedThread, Hole>;
 
 struct Dependencies {
     read_type: ArcType,
     write_type: ArcType,
+    thread: RootedThread,
     reads: Vec<ResourceId>,
     writes: Vec<ResourceId>,
 }
@@ -41,26 +52,52 @@ impl Accessor for Dependencies {
 /// A dynamic system that represents and calls the script.
 struct DynamicSystem {
     dependencies: Dependencies,
-    /// just a dummy, you would want an actual script handle here
+    read_type: ArcType,
+    write_type: ArcType,
     script: OwnedFunction<fn(GluonAny) -> GluonAny>,
 }
 
 impl<'a> System<'a> for DynamicSystem {
     type SystemData = ScriptSystemData<'a>;
 
-    fn run(&mut self, mut data: Self::SystemData) {
+    fn run(&mut self, data: Self::SystemData) {
+        println!("Run dynamic");
         let meta = data.meta_table;
-        let reads: Vec<&Reflection> = data.reads.iter().map(|resource| {
+        let mut writes = data.writes;
+
+        let input = {
+            let reads: Vec<&Reflection> = data.reads.iter().map(|resource| {
             // explicitly use the type because we're dealing with `&Resource` which is implemented
             // by a lot of types; we don't want to accidentally get a `&Box<Resource>` and cast
             // it to a `&Resource`.
-            let res = Box::as_ref(resource);
+            match resource{
+                ReadType::Read(resource) => {
+                    let res = Box::as_ref(resource);
 
-            meta.get(res).expect("Not registered in meta table")
+                    meta.get(res).expect("Not registered in meta table")}
+                ReadType::Write(i) => {
+                    let res = Box::as_ref(&writes[*i]);
+
+                    meta.get(res).expect("Not registered in meta table")
+                }
+            }
         }).collect();
 
-        let writes: Vec<&mut Reflection> = data
-            .writes
+            let thread = self.script.vm();
+            for read in &reads {
+                read.to_gluon(thread);
+            }
+
+            thread
+                .context()
+                .push_new_record(thread, reads.len(), &data.read_fields)
+                .unwrap();
+            let mut context = self.script.vm().current_context();
+            let variant = context.pop();
+            <GluonAny as Getable>::from_value(self.script.vm(), *variant)
+        };
+
+        let writes: Vec<&mut Reflection> = writes
             .iter_mut()
             .map(|resource| {
                 // explicitly use the type because we're dealing with `&mut Resource` which is
@@ -75,10 +112,14 @@ impl<'a> System<'a> for DynamicSystem {
                 res
             }).collect();
 
-        let input = ScriptInput { reads, writes };
-
         // call the script with the input
-        (self.script)(input);
+        let value = self.script.call(input).unwrap();
+        match value.get_variant().as_ref() {
+            ValueRef::Data(data) => for (variant, write) in data.iter().zip(writes) {
+                write.from_gluon(self.script.vm(), variant);
+            },
+            _ => panic!(),
+        }
     }
 
     fn accessor<'b>(&'b self) -> AccessorCow<'a, 'b, Self> {
@@ -93,15 +134,22 @@ impl<'a> System<'a> for DynamicSystem {
 /// Some trait that all of your dynamic resources should implement.
 /// This trait should be able to register / transfer it to the scripting framework.
 trait Reflection {
-    fn push(&self, thread: &Thread);
+    fn to_gluon(&self, thread: &Thread);
+
+    fn from_gluon(&mut self, thread: &Thread, variants: Variants);
 }
 
 impl<T> Reflection for T
 where
-    T: for<'vm> Pushable<'vm>,
+    T: for<'vm> Pushable<'vm> + for<'vm, 'value> Getable<'vm, 'value>,
+    T: Clone,
 {
-    fn push(&self, thread: &Thread) {
-        Pushable::push(self, &mut thread.current_context()).unwrap()
+    fn to_gluon(&self, thread: &Thread) {
+        Pushable::push(self.clone(), &mut thread.current_context()).unwrap()
+    }
+
+    fn from_gluon(&mut self, thread: &Thread, variants: Variants) {
+        *self = Getable::from_value(thread, variants)
     }
 }
 
@@ -138,18 +186,22 @@ impl ResourceTable {
     }
 
     fn get(&self, name: &str) -> ResourceId {
-        *self.map.get(name).unwrap()
+        *self
+            .map
+            .get(name)
+            .unwrap_or_else(|| panic!("Expected resource `{}`", name))
     }
 }
 
-struct ScriptInput<'a> {
-    reads: Vec<&'a Reflection>,
-    writes: Vec<&'a mut Reflection>,
+enum ReadType<'a> {
+    Write(usize),
+    Read(Ref<'a, Box<Resource + 'static>>),
 }
 
 struct ScriptSystemData<'a> {
     meta_table: Read<'a, ReflectionTable>,
-    reads: Vec<Ref<'a, Box<Resource + 'static>>>,
+    read_fields: Vec<InternedStr>,
+    reads: Vec<ReadType<'a>>,
     writes: Vec<RefMut<'a, Box<Resource + 'static>>>,
 }
 
@@ -159,15 +211,6 @@ impl<'a> DynamicSystemData<'a> for ScriptSystemData<'a> {
     fn setup(_accessor: &Dependencies, _res: &mut Resources) {}
 
     fn fetch(access: &Dependencies, res: &'a Resources) -> Self {
-        let reads = access
-            .reads
-            .iter()
-            .map(|id| id.0)
-            .map(|id| {
-                res.try_fetch_internal(id)
-                    .expect("bug: the requested resource does not exist")
-                    .borrow()
-            }).collect();
         let writes = access
             .writes
             .iter()
@@ -177,9 +220,35 @@ impl<'a> DynamicSystemData<'a> for ScriptSystemData<'a> {
                     .expect("bug: the requested resource does not exist")
                     .borrow_mut()
             }).collect();
+        let reads = access
+            .reads
+            .iter()
+            .map(|id| {
+                if let Some(i) = access.writes.iter().position(|write_id| write_id == id) {
+                    ReadType::Write(i)
+                } else {
+                    ReadType::Read(
+                        res.try_fetch_internal(id.0)
+                            .expect("bug: the requested resource does not exist")
+                            .borrow(),
+                    )
+                }
+            }).collect();
+
+        let read_fields = access
+            .read_type
+            .row_iter()
+            .map(|field| {
+                access
+                    .thread
+                    .global_env()
+                    .intern(field.name.declared_name())
+            }).collect::<Result<_, _>>()
+            .unwrap();
 
         ScriptSystemData {
             meta_table: SystemData::fetch(res),
+            read_fields,
             reads,
             writes,
         }
@@ -187,46 +256,62 @@ impl<'a> DynamicSystemData<'a> for ScriptSystemData<'a> {
 }
 
 fn create_script_sys(thread: &Thread, res: &Resources) -> DynamicSystem {
-    let reads = vec!["Bar"];
-    let writes = vec!["Foo"];
-
     // -- how we create the system --
     let table = res.fetch::<ResourceTable>();
 
+    let update_type = thread.get_global_type("update").unwrap();
+    let (read_type, write_type) = match update_type.as_function() {
+        Some(x) => x,
+        None => panic!(),
+    };
+    let reads = read_type
+        .row_iter()
+        .map(|field| field.name.declared_name())
+        .collect::<Vec<_>>();
+    let writes = write_type
+        .row_iter()
+        .map(|field| field.name.declared_name())
+        .collect::<Vec<_>>();
     let function = thread
-        .get_global::<Function<fn(GluonAny) -> GluonAny>>("update")
+        .get_global::<OwnedFunction<fn(GluonAny) -> GluonAny>>("update")
         .unwrap();
 
     let sys = DynamicSystem {
         dependencies: Dependencies {
-            read_type,
-            write_type,
+            thread: thread.root_thread(),
+            read_type: read_type.clone(),
+            write_type: write_type.clone(),
             reads: reads.iter().map(|r| table.get(r)).collect(),
             writes: writes.iter().map(|r| table.get(r)).collect(),
         },
+        read_type: read_type.clone(),
+        write_type: write_type.clone(),
         // just pass the function pointer
-        script,
+        script: function,
     };
 
     sys
 }
 
-fn main() {
+pub fn main() -> Result<(), failure::Error> {
     /// Some resource
-    #[derive(Debug, Default)]
-    struct Foo;
+    #[derive(Debug, Default, Getable, Pushable, Clone)]
+    struct Pos {
+        x: f64,
+        y: f64,
+    }
 
     /// Another resource
-    #[derive(Debug, Default)]
+    #[derive(Debug, Default, Getable, Pushable, Clone)]
     struct Bar;
 
     struct NormalSys;
 
     impl<'a> System<'a> for NormalSys {
-        type SystemData = (Read<'a, Foo>, Read<'a, Bar>);
+        type SystemData = (Read<'a, Pos>, Read<'a, Bar>);
 
         fn run(&mut self, (foo, bar): Self::SystemData) {
-            println!("Fetched foo: {:?}", &foo as &Foo);
+            println!("Fetched foo: {:?}", &foo as &Pos);
             println!("Fetched bar: {:?}", &bar as &Bar);
         }
     }
@@ -236,14 +321,14 @@ fn main() {
     {
         let mut table = res.entry().or_insert_with(|| ReflectionTable::new());
 
-        table.register(&Foo);
+        table.register(&Pos { x: 1., y: 2. });
         table.register(&Bar);
     }
 
     {
         let mut table = res.entry().or_insert_with(|| ResourceTable::new());
-        table.register::<Foo>("Foo");
-        table.register::<Bar>("Bar");
+        table.register::<Pos>("pos");
+        table.register::<Bar>("bar");
     }
 
     let mut dispatcher = DispatcherBuilder::new()
@@ -252,6 +337,15 @@ fn main() {
     dispatcher.setup(&mut res);
 
     let vm = new_vm();
+    let script = r#"
+    type Pos = { x : Float, y : Float }
+    let update r : { pos : Pos } -> { pos: Pos } =
+        let { pos } = r
+        { pos = { x = pos.x, y = pos.y + 1.0 } }
+
+    update
+    "#;
+    Compiler::new().load_script(&vm, "update", script)?;
     let script0 = create_script_sys(&vm, &res);
 
     // it is recommended you create a second dispatcher dedicated to scripts,
@@ -262,10 +356,9 @@ fn main() {
     scripts.setup(&mut res);
 
     // Game loop
-    loop {
+    for _ in 0..3 {
         dispatcher.dispatch(&res);
         scripts.dispatch(&res);
-
-        break;
     }
+    Ok(())
 }

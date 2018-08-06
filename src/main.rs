@@ -9,10 +9,15 @@ extern crate ggez;
 extern crate ggez_goodies;
 #[macro_use]
 extern crate log;
+extern crate shred;
 extern crate specs;
 #[macro_use]
 extern crate specs_derive;
 extern crate warmy;
+
+extern crate gluon;
+#[macro_use]
+extern crate gluon_codegen;
 
 use ggez::conf;
 use ggez::event;
@@ -35,6 +40,8 @@ mod error;
 mod input;
 mod resources;
 mod util;
+
+mod gluon_system;
 
 /// Function to set up logging.
 /// We write all debug messages (which will be a log)
@@ -135,31 +142,38 @@ impl EventHandler for MainState {
 }
 
 pub fn main() {
-    setup_logger().expect("Could not set up logging!");
-    let mut cb = ContextBuilder::new("game-template", "ggez")
-        .window_setup(conf::WindowSetup::default().title("game-template"))
-        .window_mode(conf::WindowMode::default().dimensions(800, 600));
-
-    // We add the CARGO_MANIFEST_DIR/resources to the filesystems paths so
-    // we we look in the cargo project for files.
-    // And save it so we can feed there result into warmy
-    let cargo_path: Option<path::PathBuf> = option_env!("CARGO_MANIFEST_DIR").map(|env_path| {
-        let mut res_path = path::PathBuf::from(env_path);
-        res_path.push("resources");
-        res_path
-    });
-    // If we have such a path then add it to the context builder too
-    // (modifying the cb from inside a closure gets sticky)
-    if let Some(ref s) = cargo_path {
-        cb = cb.add_resource_path(s);
-    }
-
-    let ctx = &mut cb.build().unwrap();
-
-    let state = &mut MainState::new(cargo_path, ctx);
-    if let Err(e) = event::run(ctx, state) {
-        println!("Error encountered: {}", e);
+    if ::std::env::args().len() == 1 {
+        if let Err(err) = ::gluon_system::main() {
+            eprintln!("{}", err);
+        }
     } else {
-        println!("Game exited cleanly.");
+        setup_logger().expect("Could not set up logging!");
+        let mut cb = ContextBuilder::new("game-template", "ggez")
+            .window_setup(conf::WindowSetup::default().title("game-template"))
+            .window_mode(conf::WindowMode::default().dimensions(800, 600))
+            .backend(ggez::conf::Backend::OpenGL { major: 2, minor: 1 });
+
+        // We add the CARGO_MANIFEST_DIR/resources to the filesystems paths so
+        // we we look in the cargo project for files.
+        // And save it so we can feed there result into warmy
+        let cargo_path: Option<path::PathBuf> = option_env!("CARGO_MANIFEST_DIR").map(|env_path| {
+            let mut res_path = path::PathBuf::from(env_path);
+            res_path.push("resources");
+            res_path
+        });
+        // If we have such a path then add it to the context builder too
+        // (modifying the cb from inside a closure gets sticky)
+        if let Some(ref s) = cargo_path {
+            cb = cb.add_resource_path(s);
+        }
+
+        let ctx = &mut cb.build().unwrap();
+
+        let state = &mut MainState::new(cargo_path, ctx);
+        if let Err(e) = event::run(ctx, state) {
+            println!("Error encountered: {}", e);
+        } else {
+            println!("Game exited cleanly.");
+        }
     }
 }
