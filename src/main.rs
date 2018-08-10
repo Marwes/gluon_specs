@@ -150,8 +150,7 @@ pub fn main() {
         setup_logger().expect("Could not set up logging!");
         let mut cb = ContextBuilder::new("game-template", "ggez")
             .window_setup(conf::WindowSetup::default().title("game-template"))
-            .window_mode(conf::WindowMode::default().dimensions(800, 600))
-            .backend(ggez::conf::Backend::OpenGL { major: 2, minor: 1 });
+            .window_mode(conf::WindowMode::default().dimensions(800, 600));
 
         // We add the CARGO_MANIFEST_DIR/resources to the filesystems paths so
         // we we look in the cargo project for files.

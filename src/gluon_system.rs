@@ -3,11 +3,15 @@ use std::collections::HashMap;
 
 use failure;
 
-use specs::{Builder, Join, ReadStorage, World};
+use specs::{
+    storage::{MaskedStorage, Storage, UnprotectedStorage},
+    world::EntitiesRes,
+    BitSet, Builder, Component, Join, ReadStorage, World,
+};
 
 use shred::cell::{Ref, RefMut};
 use shred::{
-    Accessor, AccessorCow, CastFrom, DispatcherBuilder, DynamicSystemData, MetaTable, Read,
+    Accessor, AccessorCow, CastFrom, DispatcherBuilder, DynamicSystemData, Fetch, MetaTable, Read,
     Resource, ResourceId, Resources, System, SystemData,
 };
 
@@ -24,6 +28,13 @@ use gluon::{
 };
 
 type GluonAny = OpaqueValue<RootedThread, Hole>;
+
+/// Some resource
+#[derive(Debug, Default, Getable, Pushable, Clone, Component)]
+struct Pos {
+    x: f64,
+    y: f64,
+}
 
 struct Dependencies {
     read_type: ArcType,
@@ -42,6 +53,7 @@ impl Accessor for Dependencies {
     fn reads(&self) -> Vec<ResourceId> {
         let mut reads = self.reads.clone();
         reads.push(ResourceId::new::<ReflectionTable>());
+        reads.push(ResourceId::new::<EntitiesRes>());
 
         reads
     }
@@ -65,28 +77,29 @@ impl<'a> System<'a> for DynamicSystem {
     fn run(&mut self, data: Self::SystemData) {
         println!("Run dynamic");
         let meta = data.meta_table;
+        let entities = data.entities;
         let mut writes = data.writes;
 
         let input = {
             let reads: Vec<&Reflection> = data.reads.iter().map(|resource| {
-            // explicitly use the type because we're dealing with `&Resource` which is implemented
-            // by a lot of types; we don't want to accidentally get a `&Box<Resource>` and cast
-            // it to a `&Resource`.
-            match resource{
-                ReadType::Read(resource) => {
-                    let res = Box::as_ref(resource);
+                // explicitly use the type because we're dealing with `&Resource` which is implemented
+                // by a lot of types; we don't want to accidentally get a `&Box<Resource>` and cast
+                // it to a `&Resource`.
+                match resource {
+                    ReadType::Read(resource) => {
+                        let res = Box::as_ref(resource);
 
-                    meta.get(res).expect("Not registered in meta table")}
-                ReadType::Write(i) => {
-                    let res = Box::as_ref(&writes[*i]);
+                        meta.get(res).expect("Not registered in meta table")}
+                    ReadType::Write(i) => {
+                        let res = Box::as_ref(&writes[*i]);
 
-                    meta.get(res).expect("Not registered in meta table")
+                        meta.get(res).expect("Not registered in meta table")
+                    }
                 }
-            }
-        }).collect();
+            }).collect();
 
             let thread = self.script.vm();
-            for read in &reads {
+            for read in GluonJoin(reads[0], entities.clone()).join() {
                 read.to_gluon(thread);
             }
 
@@ -99,16 +112,11 @@ impl<'a> System<'a> for DynamicSystem {
             <GluonAny as Getable>::from_value(self.script.vm(), *variant)
         };
 
-        let writes: Vec<&mut Reflection> = writes
+        let mut writes: Vec<&mut Reflection> = writes
             .iter_mut()
             .map(|resource| {
-                // explicitly use the type because we're dealing with `&mut Resource` which is
-                // implemented by a lot of types; we don't want to accidentally get a
-                // `&mut Box<Resource>` and cast it to a `&mut Resource`.
                 let res = Box::as_mut(resource);
 
-                // For some reason this needs a type ascription, otherwise Rust will think it's
-                // a `&mut (Reflection + '_)` (as opposed to `&mut (Reflection + 'static)`.
                 let res: &mut Reflection = meta.get_mut(res).expect("Not registered in meta table");
 
                 res
@@ -117,9 +125,12 @@ impl<'a> System<'a> for DynamicSystem {
         // call the script with the input
         let value = self.script.call(input).unwrap();
         match value.get_variant().as_ref() {
-            ValueRef::Data(data) => for (variant, write) in data.iter().zip(writes) {
-                write.from_gluon(self.script.vm(), variant);
-            },
+            ValueRef::Data(data) => {
+                let writes = GluonJoinMut(*writes.get_mut(0).unwrap(), entities.clone());
+                for (variant, write) in data.iter().zip(writes.join()) {
+                    write.from_gluon(self.script.vm(), variant);
+                }
+            }
             _ => panic!(),
         }
     }
@@ -133,25 +144,112 @@ impl<'a> System<'a> for DynamicSystem {
     }
 }
 
+trait Reflection {
+    unsafe fn open(&self, entities: Fetch<EntitiesRes>) -> &BitSet;
+    unsafe fn get(&self, entities: Fetch<EntitiesRes>, index: u32) -> Option<&GluonMarshal>;
+    unsafe fn get_mut(
+        &mut self,
+        entities: Fetch<EntitiesRes>,
+        index: u32,
+    ) -> Option<&mut GluonMarshal>;
+}
+
+unsafe fn forget_lifetime<'a, 'b, T: ?Sized>(x: &'a T) -> &'b T {
+    ::std::mem::transmute(x)
+}
+
+unsafe fn forget_lifetime_mut<'a, 'b, T: ?Sized>(x: &'a mut T) -> &'b mut T {
+    ::std::mem::transmute(x)
+}
+
+impl<T> Reflection for MaskedStorage<T>
+where
+    T: Component + GluonMarshal,
+{
+    unsafe fn open(&self, entities: Fetch<EntitiesRes>) -> &BitSet {
+        // mask is actually bound to `self`
+        forget_lifetime(Storage::new(entities, self).mask())
+    }
+
+    unsafe fn get(&self, entities: Fetch<EntitiesRes>, index: u32) -> Option<&GluonMarshal> {
+        Some(forget_lifetime(
+            Storage::new(entities, self)
+                .unprotected_storage()
+                .get(index),
+        ))
+    }
+
+    unsafe fn get_mut(
+        &mut self,
+        entities: Fetch<EntitiesRes>,
+        index: u32,
+    ) -> Option<&mut GluonMarshal> {
+        Some(forget_lifetime_mut(
+            Storage::new(entities, self)
+                .unprotected_storage_mut()
+                .get_mut(index),
+        ))
+    }
+}
+
+struct GluonJoin<'a>(&'a Reflection, Fetch<'a, EntitiesRes>);
+
+impl<'a> Join for GluonJoin<'a> {
+    type Type = &'a GluonMarshal;
+    type Value = Self;
+    type Mask = &'a BitSet;
+    unsafe fn open(self) -> (Self::Mask, Self::Value) {
+        (Reflection::open(self.0, self.1.clone()), self)
+    }
+
+    unsafe fn get(value: &mut Self::Value, index: u32) -> Self::Type {
+        Reflection::get(value.0, value.1.clone(), index).unwrap()
+    }
+}
+
+struct GluonJoinMut<'a, 'e>(&'a mut Reflection, Fetch<'e, EntitiesRes>);
+
+impl<'a, 'e> Join for GluonJoinMut<'a, 'e> {
+    type Type = &'a mut GluonMarshal;
+    type Value = Self;
+    type Mask = &'a BitSet;
+    unsafe fn open(self) -> (Self::Mask, Self::Value) {
+        (
+            forget_lifetime(Reflection::open(self.0, self.1.clone())),
+            self,
+        )
+    }
+
+    unsafe fn get(value: &mut Self::Value, index: u32) -> Self::Type {
+        // This is horribly unsafe. Unfortunately, Rust doesn't provide a way
+        // to abstract mutable/immutable state at the moment, so we have to hack
+        // our way through it.
+        let reflection = forget_lifetime_mut(value.0);
+        Reflection::get_mut(reflection, value.1.clone(), index).unwrap()
+    }
+}
+
 /// Some trait that all of your dynamic resources should implement.
 /// This trait should be able to register / transfer it to the scripting framework.
-trait Reflection {
+trait GluonMarshal {
     fn to_gluon(&self, thread: &Thread);
 
     fn from_gluon(&mut self, thread: &Thread, variants: Variants);
 }
 
-impl<T> Reflection for T
+impl<T> GluonMarshal for T
 where
     T: for<'vm> Pushable<'vm> + for<'vm, 'value> Getable<'vm, 'value>,
-    T: Clone,
+    T: Clone + ::std::fmt::Debug,
 {
     fn to_gluon(&self, thread: &Thread) {
+        eprintln!("Push {:?}", self);
         Pushable::push(self.clone(), &mut thread.current_context()).unwrap()
     }
 
     fn from_gluon(&mut self, thread: &Thread, variants: Variants) {
-        *self = Getable::from_value(thread, variants)
+        *self = Getable::from_value(thread, variants);
+        eprintln!("Return {:?}", self);
     }
 }
 
@@ -183,8 +281,9 @@ impl ResourceTable {
         }
     }
 
-    fn register<T: Resource>(&mut self, name: &str) {
-        self.map.insert(name.to_owned(), ResourceId::new::<T>());
+    fn register<T: Component>(&mut self, name: &str) {
+        self.map
+            .insert(name.to_owned(), ResourceId::new::<MaskedStorage<T>>());
     }
 
     fn get(&self, name: &str) -> ResourceId {
@@ -205,6 +304,7 @@ struct ScriptSystemData<'a> {
     read_fields: Vec<InternedStr>,
     reads: Vec<ReadType<'a>>,
     writes: Vec<RefMut<'a, Box<Resource + 'static>>>,
+    entities: Fetch<'a, EntitiesRes>,
 }
 
 impl<'a> DynamicSystemData<'a> for ScriptSystemData<'a> {
@@ -248,10 +348,13 @@ impl<'a> DynamicSystemData<'a> for ScriptSystemData<'a> {
             }).collect::<Result<_, _>>()
             .unwrap();
 
+        let entities = res.fetch();
+
         ScriptSystemData {
             meta_table: SystemData::fetch(res),
             read_fields,
             reads,
+            entities,
             writes,
         }
     }
@@ -296,13 +399,6 @@ fn create_script_sys(thread: &Thread, res: &Resources) -> DynamicSystem {
 }
 
 pub fn main() -> Result<(), failure::Error> {
-    /// Some resource
-    #[derive(Debug, Default, Getable, Pushable, Clone, Component)]
-    struct Pos {
-        x: f64,
-        y: f64,
-    }
-
     /// Another resource
     #[derive(Debug, Default, Getable, Pushable, Clone, Component)]
     struct Bar;
@@ -324,8 +420,8 @@ pub fn main() -> Result<(), failure::Error> {
     {
         let mut table = world.res.entry().or_insert_with(|| ReflectionTable::new());
 
-        table.register(&Pos { x: 1., y: 2. });
-        table.register(&Bar);
+        table.register(&MaskedStorage::<Pos>::new(Default::default()));
+        table.register(&MaskedStorage::<Bar>::new(Default::default()));
     }
 
     {
@@ -336,8 +432,16 @@ pub fn main() -> Result<(), failure::Error> {
     world.register::<Pos>();
     world.register::<Bar>();
 
-    world.create_entity().with(Pos { x: 1., y: 2. }).build();
-    world.create_entity().with(Pos { x: 1., y: 2. }).build();
+    world
+        .create_entity()
+        .with(Pos { x: 1., y: 2. })
+        .with(Bar)
+        .build();
+    world
+        .create_entity()
+        .with(Pos { x: 1., y: 2. })
+        .with(Bar)
+        .build();
 
     let mut dispatcher = DispatcherBuilder::new()
         .with(NormalSys, "normal", &[])

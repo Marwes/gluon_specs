@@ -22,3 +22,6 @@ failure = "0.1"
 
 gluon = { path = "../gluon" }
 gluon_codegen = { path = "../gluon/codegen" }
+
+[patch.crates-io]
+shred = { path = "../shred" }
