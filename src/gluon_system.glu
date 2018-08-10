@@ -1,10 +1,5 @@
 let { negate } = import! std.num
-
-type Tween a = a -> a -> a -> a
-let linear : [Num a] -> Tween a = \from t to ->
-    from + (to - from) * t
     
-
 #[derive(Eq, Show)]
 type Pos = { x : Float, y : Float }
 
