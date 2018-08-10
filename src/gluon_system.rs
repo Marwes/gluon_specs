@@ -334,11 +334,8 @@ impl ResourceTable {
             .insert(name.to_owned(), ResourceId::new::<MaskedStorage<T>>());
     }
 
-    fn get(&self, name: &str) -> ResourceId {
-        *self
-            .map
-            .get(name)
-            .unwrap_or_else(|| panic!("Expected resource `{}`", name))
+    fn get(&self, name: &str) -> Option<&ResourceId> {
+        self.map.get(name)
     }
 }
 
@@ -415,7 +412,7 @@ fn create_script_sys(thread: &Thread, res: &Resources) -> Result<DynamicSystem, 
     let update_type = thread.get_global_type("update")?;
     let (read_type, write_type) = match update_type.as_function() {
         Some(x) => x,
-        None => panic!(),
+        None => return Err(failure::err_msg("Expected function type")),
     };
     let reads = read_type
         .row_iter()
@@ -427,13 +424,26 @@ fn create_script_sys(thread: &Thread, res: &Resources) -> Result<DynamicSystem, 
         .collect::<Vec<_>>();
     let function = thread.get_global::<OwnedFunction<fn(GluonAny) -> GluonAny>>("update")?;
 
+    let get_resource = |r| {
+        table
+            .get(r)
+            .cloned()
+            .ok_or_else(|| failure::err_msg(format!("Component `{}` does not exist", r)))
+    };
+
     let sys = DynamicSystem {
         dependencies: Dependencies {
             thread: thread.root_thread(),
             read_type: read_type.clone(),
             write_type: write_type.clone(),
-            reads: reads.iter().map(|r| table.get(r)).collect(),
-            writes: writes.iter().map(|r| table.get(r)).collect(),
+            reads: reads
+                .iter()
+                .map(|r| get_resource(r))
+                .collect::<Result<_, _>>()?,
+            writes: writes
+                .iter()
+                .map(|r| get_resource(r))
+                .collect::<Result<_, _>>()?,
         },
         read_type: read_type.clone(),
         write_type: write_type.clone(),
