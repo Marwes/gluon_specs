@@ -260,6 +260,7 @@ impl<'a, 'e> Join for GluonJoinMut<'a, 'e> {
     unsafe fn get(value: &mut Self::Value, index: u32) -> Self::Type {
         let GluonJoinMut(ref mut writes, ref mut outputs, ref entities, _) = *value;
 
+        // FIXME Don't rely on the indexes being sequential
         let value = outputs.pop().unwrap();
         let thread = value.vm();
         // call the script with the input
@@ -407,11 +408,11 @@ impl<'a> DynamicSystemData<'a> for ScriptSystemData<'a> {
     }
 }
 
-fn create_script_sys(thread: &Thread, res: &Resources) -> DynamicSystem {
+fn create_script_sys(thread: &Thread, res: &Resources) -> Result<DynamicSystem, failure::Error> {
     // -- how we create the system --
     let table = res.fetch::<ResourceTable>();
 
-    let update_type = thread.get_global_type("update").unwrap();
+    let update_type = thread.get_global_type("update")?;
     let (read_type, write_type) = match update_type.as_function() {
         Some(x) => x,
         None => panic!(),
@@ -424,9 +425,7 @@ fn create_script_sys(thread: &Thread, res: &Resources) -> DynamicSystem {
         .row_iter()
         .map(|field| field.name.declared_name())
         .collect::<Vec<_>>();
-    let function = thread
-        .get_global::<OwnedFunction<fn(GluonAny) -> GluonAny>>("update")
-        .unwrap();
+    let function = thread.get_global::<OwnedFunction<fn(GluonAny) -> GluonAny>>("update")?;
 
     let sys = DynamicSystem {
         dependencies: Dependencies {
@@ -442,7 +441,7 @@ fn create_script_sys(thread: &Thread, res: &Resources) -> DynamicSystem {
         script: function,
     };
 
-    sys
+    Ok(sys)
 }
 
 pub fn main() -> Result<(), failure::Error> {
@@ -498,7 +497,7 @@ pub fn main() -> Result<(), failure::Error> {
     let vm = new_vm();
     let script = fs::read_to_string("src/gluon_system.glu")?;
     Compiler::new().load_script(&vm, "update", &script)?;
-    let script0 = create_script_sys(&vm, &world.res);
+    let script0 = create_script_sys(&vm, &world.res)?;
 
     // it is recommended you create a second dispatcher dedicated to scripts,
     // that'll allow you to rebuild if necessary
