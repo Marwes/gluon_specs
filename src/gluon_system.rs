@@ -1,5 +1,6 @@
 // in a real application you would use `fnv`
 use std::collections::HashMap;
+use std::fs;
 
 use failure;
 
@@ -495,33 +496,8 @@ pub fn main() -> Result<(), failure::Error> {
     dispatcher.setup(&mut world.res);
 
     let vm = new_vm();
-    let script = r#"
-    let { negate } = import! std.num
-
-    type Tween a = a -> a -> a -> a
-    let linear : [Num a] -> Tween a = \from t to ->
-        from + (to - from) * t
-        
-
-    #[derive(Eq, Show)]
-    type Pos = { x : Float, y : Float }
-
-    let num_Pos : Num Pos = {
-        ord = { eq = eq_Pos, compare = \_ _ -> error "Unimplemented" },
-        (+) = \l r -> { x = l.x + r.x, y = l.y + r.y },
-        (-) = \l r -> { x = l.x - r.x, y = l.y - r.y },
-        (*) = \l r -> { x = l.x * r.x, y = l.y * r.y },
-        (/) = \l r -> { x = l.x / r.x, y = l.y / r.y },
-        negate = \x -> { x = negate x.x, y = negate x.y },
-    }
-
-    let update r : { pos : Pos } -> { pos: Pos } =
-        let { pos } = r
-        { pos = { x = pos.x, y = pos.y + 1.0 } }
-
-    update
-    "#;
-    Compiler::new().load_script(&vm, "update", script)?;
+    let script = fs::read_to_string("src/gluon_system.glu")?;
+    Compiler::new().load_script(&vm, "update", &script)?;
     let script0 = create_script_sys(&vm, &world.res);
 
     // it is recommended you create a second dispatcher dedicated to scripts,
