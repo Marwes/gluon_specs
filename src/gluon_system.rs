@@ -30,6 +30,9 @@ use gluon::{
 
 type GluonAny = OpaqueValue<RootedThread, Hole>;
 
+#[derive(Debug, Clone, Default, Getable, Pushable)]
+struct DeltaTime(f64);
+
 /// Some resource
 #[derive(Debug, Default, Getable, Pushable, Clone, Component)]
 struct Pos {
@@ -147,7 +150,7 @@ impl<'a> System<'a> for DynamicSystem {
 }
 
 trait Reflection {
-    unsafe fn open(&self, entities: Fetch<EntitiesRes>) -> &BitSet;
+    unsafe fn open(&self, entities: Fetch<EntitiesRes>) -> Option<&BitSet>;
     unsafe fn get(&self, entities: Fetch<EntitiesRes>, index: u32) -> &GluonMarshal;
     unsafe fn get_mut(&mut self, entities: Fetch<EntitiesRes>, index: u32) -> &mut GluonMarshal;
 }
@@ -160,13 +163,27 @@ unsafe fn forget_lifetime_mut<'a, 'b, T: ?Sized>(x: &'a mut T) -> &'b mut T {
     ::std::mem::transmute(x)
 }
 
+impl Reflection for DeltaTime {
+    unsafe fn open(&self, _entities: Fetch<EntitiesRes>) -> Option<&BitSet> {
+        None
+    }
+
+    unsafe fn get(&self, entities: Fetch<EntitiesRes>, index: u32) -> &GluonMarshal {
+        self
+    }
+
+    unsafe fn get_mut(&mut self, entities: Fetch<EntitiesRes>, index: u32) -> &mut GluonMarshal {
+        self
+    }
+}
+
 impl<T> Reflection for MaskedStorage<T>
 where
     T: Component + GluonMarshal,
 {
-    unsafe fn open(&self, entities: Fetch<EntitiesRes>) -> &BitSet {
+    unsafe fn open(&self, entities: Fetch<EntitiesRes>) -> Option<&BitSet> {
         // mask is actually bound to `self`
-        forget_lifetime(Storage::new(entities, self).mask())
+        Some(forget_lifetime(Storage::new(entities, self).mask()))
     }
 
     unsafe fn get(&self, entities: Fetch<EntitiesRes>, index: u32) -> &GluonMarshal {
@@ -228,7 +245,7 @@ fn reflection_bitset<'a>(
 ) -> BitSet {
     unsafe {
         iter.into_iter()
-            .map(|reflection| Reflection::open(reflection, entities.clone()))
+            .flat_map(|reflection| Reflection::open(reflection, entities.clone()))
             .fold(None, |acc, set| {
                 Some(match acc {
                     Some(mut acc) => {
@@ -329,7 +346,11 @@ impl ResourceTable {
         }
     }
 
-    fn register<T: Component>(&mut self, name: &str) {
+    fn register<T: Send + Sync + 'static>(&mut self, name: &str) {
+        self.map.insert(name.to_owned(), ResourceId::new::<T>());
+    }
+
+    fn register_component<T: Component>(&mut self, name: &str) {
         self.map
             .insert(name.to_owned(), ResourceId::new::<MaskedStorage<T>>());
     }
@@ -478,12 +499,15 @@ pub fn main() -> Result<(), failure::Error> {
 
         table.register(&MaskedStorage::<Pos>::new(Default::default()));
         table.register(&MaskedStorage::<Bar>::new(Default::default()));
+        table.register(&DeltaTime(0.));
     }
 
+    world.res.entry().or_insert_with(|| DeltaTime(0.1));
     {
         let mut table = world.res.entry().or_insert_with(|| ResourceTable::new());
-        table.register::<Pos>("pos");
-        table.register::<Bar>("bar");
+        table.register_component::<Pos>("pos");
+        table.register_component::<Bar>("bar");
+        table.register::<DeltaTime>("dt");
     }
     world.register::<Pos>();
     world.register::<Bar>();

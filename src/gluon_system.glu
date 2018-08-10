@@ -12,8 +12,8 @@ let num_Pos : Num Pos = {
     negate = \x -> { x = negate x.x, y = negate x.y },
 }
 
-let update r : { pos : Pos } -> { pos : Pos } =
-    let { pos } = r
-    { pos = { x = pos.x, y = pos.y + 1.0 } }
+let update r : { pos : Pos, dt: Float } -> { pos : Pos } =
+    let { pos, dt } = r
+    { pos = { x = pos.x, y = pos.y + 1.0 * dt } }
 
 update
