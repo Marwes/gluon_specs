@@ -80,7 +80,10 @@ impl<'a> System<'a> for DynamicSystem {
         let entities = data.entities;
         let mut writes = data.writes;
 
-        let input = {
+        let mask;
+
+        let mut outputs = Vec::new();
+        {
             let reads: Vec<&Reflection> = data.reads.iter().map(|resource| {
                 // explicitly use the type because we're dealing with `&Resource` which is implemented
                 // by a lot of types; we don't want to accidentally get a `&Box<Resource>` and cast
@@ -97,20 +100,26 @@ impl<'a> System<'a> for DynamicSystem {
                     }
                 }
             }).collect();
+            mask = reflection_bitset(
+                reads.iter().cloned().chain(writes.iter().map(|resource| {
+                    let res = Box::as_ref(resource);
 
-            let thread = self.script.vm();
-            for read in GluonJoin(reads[0], entities.clone()).join() {
-                read.to_gluon(thread);
+                    let res: &Reflection = meta.get(res).expect("Not registered in meta table");
+
+                    res
+                })),
+                entities.clone(),
+            );
+
+            let thread = self.script.vm().root_thread();
+
+            for input in
+                GluonJoin(&reads, entities.clone(), &thread, &data.read_fields, &mask).join()
+            {
+                let value = self.script.call(input).unwrap();
+                Vec::push(&mut outputs, value);
             }
-
-            thread
-                .context()
-                .push_new_record(thread, reads.len(), &data.read_fields)
-                .unwrap();
-            let mut context = self.script.vm().current_context();
-            let variant = context.pop();
-            <GluonAny as Getable>::from_value(self.script.vm(), *variant)
-        };
+        }
 
         let mut writes: Vec<&mut Reflection> = writes
             .iter_mut()
@@ -122,17 +131,9 @@ impl<'a> System<'a> for DynamicSystem {
                 res
             }).collect();
 
-        // call the script with the input
-        let value = self.script.call(input).unwrap();
-        match value.get_variant().as_ref() {
-            ValueRef::Data(data) => {
-                let writes = GluonJoinMut(*writes.get_mut(0).unwrap(), entities.clone());
-                for (variant, write) in data.iter().zip(writes.join()) {
-                    write.from_gluon(self.script.vm(), variant);
-                }
-            }
-            _ => panic!(),
-        }
+        outputs.reverse();
+        let writes = GluonJoinMut(&mut writes, outputs, entities.clone(), &mask);
+        for () in writes.join() {}
     }
 
     fn accessor<'b>(&'b self) -> AccessorCow<'a, 'b, Self> {
@@ -146,12 +147,8 @@ impl<'a> System<'a> for DynamicSystem {
 
 trait Reflection {
     unsafe fn open(&self, entities: Fetch<EntitiesRes>) -> &BitSet;
-    unsafe fn get(&self, entities: Fetch<EntitiesRes>, index: u32) -> Option<&GluonMarshal>;
-    unsafe fn get_mut(
-        &mut self,
-        entities: Fetch<EntitiesRes>,
-        index: u32,
-    ) -> Option<&mut GluonMarshal>;
+    unsafe fn get(&self, entities: Fetch<EntitiesRes>, index: u32) -> &GluonMarshal;
+    unsafe fn get_mut(&mut self, entities: Fetch<EntitiesRes>, index: u32) -> &mut GluonMarshal;
 }
 
 unsafe fn forget_lifetime<'a, 'b, T: ?Sized>(x: &'a T) -> &'b T {
@@ -171,61 +168,110 @@ where
         forget_lifetime(Storage::new(entities, self).mask())
     }
 
-    unsafe fn get(&self, entities: Fetch<EntitiesRes>, index: u32) -> Option<&GluonMarshal> {
-        Some(forget_lifetime(
+    unsafe fn get(&self, entities: Fetch<EntitiesRes>, index: u32) -> &GluonMarshal {
+        forget_lifetime(
             Storage::new(entities, self)
                 .unprotected_storage()
                 .get(index),
-        ))
-    }
-
-    unsafe fn get_mut(
-        &mut self,
-        entities: Fetch<EntitiesRes>,
-        index: u32,
-    ) -> Option<&mut GluonMarshal> {
-        Some(forget_lifetime_mut(
-            Storage::new(entities, self)
-                .unprotected_storage_mut()
-                .get_mut(index),
-        ))
-    }
-}
-
-struct GluonJoin<'a>(&'a Reflection, Fetch<'a, EntitiesRes>);
-
-impl<'a> Join for GluonJoin<'a> {
-    type Type = &'a GluonMarshal;
-    type Value = Self;
-    type Mask = &'a BitSet;
-    unsafe fn open(self) -> (Self::Mask, Self::Value) {
-        (Reflection::open(self.0, self.1.clone()), self)
-    }
-
-    unsafe fn get(value: &mut Self::Value, index: u32) -> Self::Type {
-        Reflection::get(value.0, value.1.clone(), index).unwrap()
-    }
-}
-
-struct GluonJoinMut<'a, 'e>(&'a mut Reflection, Fetch<'e, EntitiesRes>);
-
-impl<'a, 'e> Join for GluonJoinMut<'a, 'e> {
-    type Type = &'a mut GluonMarshal;
-    type Value = Self;
-    type Mask = &'a BitSet;
-    unsafe fn open(self) -> (Self::Mask, Self::Value) {
-        (
-            forget_lifetime(Reflection::open(self.0, self.1.clone())),
-            self,
         )
     }
 
+    unsafe fn get_mut(&mut self, entities: Fetch<EntitiesRes>, index: u32) -> &mut GluonMarshal {
+        forget_lifetime_mut(
+            Storage::new(entities, self)
+                .unprotected_storage_mut()
+                .get_mut(index),
+        )
+    }
+}
+
+struct GluonJoin<'a>(
+    &'a [&'a Reflection],
+    Fetch<'a, EntitiesRes>,
+    &'a Thread,
+    &'a [InternedStr],
+    &'a BitSet,
+);
+
+impl<'a> Join for GluonJoin<'a> {
+    type Type = GluonAny;
+    type Value = Self;
+    type Mask = &'a BitSet;
+    unsafe fn open(self) -> (Self::Mask, Self::Value) {
+        let mask = self.4;
+        (mask, self)
+    }
+
     unsafe fn get(value: &mut Self::Value, index: u32) -> Self::Type {
-        // This is horribly unsafe. Unfortunately, Rust doesn't provide a way
-        // to abstract mutable/immutable state at the moment, so we have to hack
-        // our way through it.
-        let reflection = forget_lifetime_mut(value.0);
-        Reflection::get_mut(reflection, value.1.clone(), index).unwrap()
+        let reads = value.0;
+        let thread = value.2;
+        let read_fields = value.3;
+        for reflection in reads {
+            let read = Reflection::get(*reflection, value.1.clone(), index);
+            read.to_gluon(thread);
+        }
+
+        thread
+            .context()
+            .push_new_record(thread, reads.len(), &read_fields)
+            .unwrap();
+        let mut context = thread.current_context();
+        let variant = context.pop();
+        <GluonAny as Getable>::from_value(thread, *variant)
+    }
+}
+
+fn reflection_bitset<'a>(
+    iter: impl IntoIterator<Item = &'a Reflection>,
+    entities: Fetch<EntitiesRes>,
+) -> BitSet {
+    unsafe {
+        iter.into_iter()
+            .map(|reflection| Reflection::open(reflection, entities.clone()))
+            .fold(None, |acc, set| {
+                Some(match acc {
+                    Some(mut acc) => {
+                        acc &= set;
+                        acc
+                    }
+                    None => set.clone(),
+                })
+            }).unwrap()
+    }
+}
+
+struct GluonJoinMut<'a, 'e>(
+    &'a mut [&'a mut Reflection],
+    Vec<GluonAny>,
+    Fetch<'e, EntitiesRes>,
+    &'a BitSet,
+);
+
+impl<'a, 'e> Join for GluonJoinMut<'a, 'e> {
+    type Type = ();
+    type Value = Self;
+    type Mask = &'a BitSet;
+    unsafe fn open(self) -> (Self::Mask, Self::Value) {
+        let mask = self.3;
+        (mask, self)
+    }
+
+    unsafe fn get(value: &mut Self::Value, index: u32) -> Self::Type {
+        let GluonJoinMut(ref mut writes, ref mut outputs, ref entities, _) = *value;
+
+        let value = outputs.pop().unwrap();
+        let thread = value.vm();
+        // call the script with the input
+        match value.get_variant().as_ref() {
+            ValueRef::Data(data) => {
+                for (variant, write) in data.iter().zip(&mut **writes) {
+                    write
+                        .get_mut(entities.clone(), index)
+                        .from_gluon(thread, variant);
+                }
+            }
+            _ => panic!(),
+        }
     }
 }
 
