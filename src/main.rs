@@ -17,6 +17,8 @@ extern crate warmy;
 
 extern crate gluon;
 #[macro_use]
+extern crate gluon_vm;
+#[macro_use]
 extern crate gluon_codegen;
 
 use ggez::conf;

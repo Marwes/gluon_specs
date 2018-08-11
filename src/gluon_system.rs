@@ -1,13 +1,15 @@
 // in a real application you would use `fnv`
 use std::collections::HashMap;
+use std::fmt;
 use std::fs;
+use std::mem;
 
 use failure;
 
 use specs::{
     storage::{MaskedStorage, Storage, UnprotectedStorage},
     world::EntitiesRes,
-    BitSet, Builder, Component, Join, ReadStorage, World,
+    BitSet, Builder, Component, Entity, Join, LazyUpdate, ReadStorage, World,
 };
 
 use shred::cell::{Ref, RefMut};
@@ -18,12 +20,17 @@ use shred::{
 
 use gluon::{
     base::types::ArcType,
+    import::add_extern_module,
     new_vm,
     vm::{
-        api::{Getable, Hole, OpaqueValue, OwnedFunction, Pushable, ValueRef},
+        self,
+        api::{
+            generic, Getable, Hole, OpaqueRef, OpaqueValue, OwnedFunction, Pushable, UserdataValue,
+            ValueRef,
+        },
         internal::InternedStr,
         thread::ThreadInternal,
-        Variants,
+        ExternModule, Variants,
     },
     Compiler, RootedThread, Thread,
 };
@@ -32,6 +39,30 @@ type GluonAny = OpaqueValue<RootedThread, Hole>;
 
 #[derive(Debug, Clone, Default, Getable, Pushable)]
 struct DeltaTime(f64);
+
+#[derive(Debug, Default, Userdata)]
+#[repr(transparent)]
+struct GluonEntities(EntitiesRes);
+
+#[derive(Debug, Userdata)]
+struct GluonEntitiesPtr(*const EntitiesRes);
+unsafe impl Send for GluonEntitiesPtr {}
+unsafe impl Sync for GluonEntitiesPtr {}
+
+#[derive(Default, Userdata)]
+#[repr(transparent)]
+struct GluonLazyUpdate(LazyUpdate);
+
+impl fmt::Debug for GluonLazyUpdate {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "LazyUpdate(..)")
+    }
+}
+
+#[derive(Debug, Userdata)]
+struct GluonLazyUpdatePtr(*const LazyUpdate);
+unsafe impl Send for GluonLazyUpdatePtr {}
+unsafe impl Sync for GluonLazyUpdatePtr {}
 
 /// Some resource
 #[derive(Debug, Default, Getable, Pushable, Clone, Component)]
@@ -168,12 +199,40 @@ impl Reflection for DeltaTime {
         None
     }
 
-    unsafe fn get(&self, entities: Fetch<EntitiesRes>, index: u32) -> &GluonMarshal {
+    unsafe fn get(&self, _entities: Fetch<EntitiesRes>, _index: u32) -> &GluonMarshal {
         self
     }
 
-    unsafe fn get_mut(&mut self, entities: Fetch<EntitiesRes>, index: u32) -> &mut GluonMarshal {
+    unsafe fn get_mut(&mut self, _entities: Fetch<EntitiesRes>, _index: u32) -> &mut GluonMarshal {
         self
+    }
+}
+
+impl Reflection for EntitiesRes {
+    unsafe fn open(&self, _entities: Fetch<EntitiesRes>) -> Option<&BitSet> {
+        None
+    }
+
+    unsafe fn get(&self, _entities: Fetch<EntitiesRes>, _index: u32) -> &GluonMarshal {
+        mem::transmute::<&EntitiesRes, &GluonEntities>(self)
+    }
+
+    unsafe fn get_mut(&mut self, _entities: Fetch<EntitiesRes>, _index: u32) -> &mut GluonMarshal {
+        mem::transmute::<&mut EntitiesRes, &mut GluonEntities>(self)
+    }
+}
+
+impl Reflection for LazyUpdate {
+    unsafe fn open(&self, _entities: Fetch<EntitiesRes>) -> Option<&BitSet> {
+        None
+    }
+
+    unsafe fn get(&self, _entities: Fetch<EntitiesRes>, _index: u32) -> &GluonMarshal {
+        mem::transmute::<&Self, &GluonLazyUpdate>(self)
+    }
+
+    unsafe fn get_mut(&mut self, _entities: Fetch<EntitiesRes>, _index: u32) -> &mut GluonMarshal {
+        mem::transmute::<&mut Self, &mut GluonLazyUpdate>(self)
     }
 }
 
@@ -294,12 +353,66 @@ impl<'a, 'e> Join for GluonJoinMut<'a, 'e> {
     }
 }
 
+#[derive(Userdata, Debug)]
+struct GluonEntity(Entity);
+
+fn create_entity(ptr: &GluonEntitiesPtr) -> GluonEntity {
+    let entities = unsafe { &*ptr.0 };
+    GluonEntity(entities.create())
+}
+
+fn add_component<'a>(
+    lazy: &GluonLazyUpdatePtr,
+    name: &str,
+    component: OpaqueRef<'a, generic::A>,
+    entity: OpaqueRef<GluonEntity>,
+) {
+    let lazy = unsafe { &*lazy.0 };
+    lazy.insert(entity.0.clone(), Pos { x: 0., y: 0. });
+}
+
+fn load(vm: &Thread) -> vm::Result<ExternModule> {
+    ExternModule::new(
+        vm,
+        record! {
+            create => primitive!(1 create_entity),
+            add_component => primitive!(4 add_component)
+        },
+    )
+}
+
 /// Some trait that all of your dynamic resources should implement.
 /// This trait should be able to register / transfer it to the scripting framework.
 trait GluonMarshal {
     fn to_gluon(&self, thread: &Thread);
 
     fn from_gluon(&mut self, thread: &Thread, variants: Variants);
+}
+
+impl GluonMarshal for GluonEntities {
+    fn to_gluon(&self, thread: &Thread) {
+        eprintln!("Push entities");
+        UserdataValue(GluonEntitiesPtr(&self.0 as *const _))
+            .push(&mut thread.current_context())
+            .unwrap()
+    }
+
+    fn from_gluon(&mut self, _thread: &Thread, _variants: Variants) {
+        unimplemented!()
+    }
+}
+
+impl GluonMarshal for GluonLazyUpdate {
+    fn to_gluon(&self, thread: &Thread) {
+        eprintln!("Push updater");
+        UserdataValue(GluonLazyUpdatePtr(&self.0 as *const _))
+            .push(&mut thread.current_context())
+            .unwrap()
+    }
+
+    fn from_gluon(&mut self, _thread: &Thread, _variants: Variants) {
+        unimplemented!()
+    }
 }
 
 impl<T> GluonMarshal for T
@@ -500,6 +613,8 @@ pub fn main() -> Result<(), failure::Error> {
         table.register(&MaskedStorage::<Pos>::new(Default::default()));
         table.register(&MaskedStorage::<Bar>::new(Default::default()));
         table.register(&DeltaTime(0.));
+        table.register(&EntitiesRes::default());
+        table.register(&LazyUpdate::default());
     }
 
     world.res.entry().or_insert_with(|| DeltaTime(0.1));
@@ -508,6 +623,8 @@ pub fn main() -> Result<(), failure::Error> {
         table.register_component::<Pos>("pos");
         table.register_component::<Bar>("bar");
         table.register::<DeltaTime>("dt");
+        table.register::<EntitiesRes>("entities");
+        table.register::<LazyUpdate>("lazy_update");
     }
     world.register::<Pos>();
     world.register::<Bar>();
@@ -529,6 +646,13 @@ pub fn main() -> Result<(), failure::Error> {
     dispatcher.setup(&mut world.res);
 
     let vm = new_vm();
+
+    vm.register_type::<GluonEntitiesPtr>("Entities", &[])?;
+    vm.register_type::<GluonEntity>("Entity", &[])?;
+    vm.register_type::<GluonLazyUpdatePtr>("LazyUpdate", &[])?;
+
+    add_extern_module(&vm, "entity", load);
+
     let script = fs::read_to_string("src/gluon_system.glu")?;
     Compiler::new().load_script(&vm, "update", &script)?;
     let script0 = create_script_sys(&vm, &world.res)?;
@@ -544,6 +668,7 @@ pub fn main() -> Result<(), failure::Error> {
     for _ in 0..3 {
         dispatcher.dispatch(&mut world.res);
         scripts.dispatch(&mut world.res);
+        world.maintain();
     }
     Ok(())
 }

@@ -1,4 +1,5 @@
 let { negate } = import! std.num
+let entity = import! entity
     
 #[derive(Eq, Show)]
 type Pos = { x : Float, y : Float }
@@ -12,8 +13,10 @@ let num_Pos : Num Pos = {
     negate = \x -> { x = negate x.x, y = negate x.y },
 }
 
-let update r : { pos : Pos, dt: Float } -> { pos : Pos } =
-    let { pos, dt } = r
+let update r : { pos : Pos, dt: Float, entities : Entities, lazy_update: LazyUpdate } -> { pos : Pos } =
+    let { pos, dt, entities, lazy_update } = r
+    let e = entity.create entities
+    entity.add_component lazy_update "pos" pos e
     { pos = { x = pos.x, y = pos.y + 1.0 * dt } }
 
 update

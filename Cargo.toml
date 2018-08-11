@@ -21,6 +21,7 @@ chrono = "0.4"
 failure = "0.1"
 
 gluon = { path = "../gluon" }
+gluon_vm = { path = "../gluon/vm" }
 gluon_codegen = { path = "../gluon/codegen" }
 
 [patch.crates-io]
