@@ -17,6 +17,7 @@ let update r : { pos : Pos, dt: Float, entities : Entities, lazy_update: LazyUpd
     let { pos, dt, entities, lazy_update } = r
     let e = entity.create entities
     entity.add_component lazy_update "pos" pos e
-    { pos = { x = pos.x, y = pos.y + 1.0 * dt } }
+    entity.add_component lazy_update "vel" pos e
+    { pos = pos + { x = 0., y = 1.0 * dt } }
 
 update

@@ -9,7 +9,7 @@ use failure;
 use specs::{
     storage::{MaskedStorage, Storage, UnprotectedStorage},
     world::EntitiesRes,
-    BitSet, Builder, Component, Entity, Join, LazyUpdate, ReadStorage, World,
+    BitSet, Builder, Component, Entity, Join, LazyUpdate, ReadStorage, World, WriteStorage,
 };
 
 use shred::cell::{Ref, RefMut};
@@ -25,8 +25,8 @@ use gluon::{
     vm::{
         self,
         api::{
-            generic, Getable, Hole, OpaqueRef, OpaqueValue, OwnedFunction, Pushable, UserdataValue,
-            ValueRef,
+            generic, Getable, Hole, OpaqueRef, OpaqueValue, OwnedFunction, Pushable, RuntimeResult,
+            UserdataValue, ValueRef, WithVM,
         },
         internal::InternedStr,
         thread::ThreadInternal,
@@ -88,6 +88,12 @@ impl fmt::Debug for GluonLazyUpdate {
 /// Some resource
 #[derive(Debug, Default, Getable, Pushable, Clone, Component)]
 struct Pos {
+    x: f64,
+    y: f64,
+}
+
+#[derive(Debug, Default, Getable, Pushable, Clone, Component)]
+struct Vel {
     x: f64,
     y: f64,
 }
@@ -354,14 +360,19 @@ fn create_entity(ptr: &GluonEntitiesPtr) -> GluonEntity {
     GluonEntity(entities.create())
 }
 
-fn add_component<'a>(
-    lazy: &GluonLazyUpdatePtr,
+fn add_component(
+    WithVM { vm, value: lazy }: WithVM<&GluonLazyUpdatePtr>,
     name: &str,
-    component: OpaqueRef<'a, generic::A>,
+    component: OpaqueRef<generic::A>,
     entity: OpaqueRef<GluonEntity>,
-) {
+) -> RuntimeResult<(), &'static str> {
     let lazy = unsafe { &*lazy.0 };
-    lazy.insert(entity.0.clone(), Pos { x: 0., y: 0. });
+    let entity = entity.0.clone();
+    RuntimeResult::Return(match name {
+        "pos" => lazy.insert(entity, Pos::from_value(vm, component.get_variant())),
+        "vel" => lazy.insert(entity, Vel::from_value(vm, component.get_variant())),
+        _ => return RuntimeResult::Panic("Unknown component"),
+    })
 }
 
 fn load(vm: &Thread) -> vm::Result<ExternModule> {
@@ -441,6 +452,7 @@ where
 type ReflectionTable = MetaTable<Reflection>;
 
 /// Maps resource names to resource ids.
+#[derive(Debug, Default)]
 struct ResourceTable {
     map: HashMap<String, ResourceId>,
 }
@@ -599,27 +611,67 @@ pub fn main() -> Result<(), failure::Error> {
         }
     }
 
+    struct Movement;
+
+    impl<'a> System<'a> for Movement {
+        type SystemData = (WriteStorage<'a, Pos>, ReadStorage<'a, Vel>);
+
+        fn run(&mut self, (mut pos, vel): Self::SystemData) {
+            for (mut pos, vel) in (&mut pos, &vel).join() {
+                eprintln!("Updating movement {:?}", vel);
+                pos.x += vel.x;
+                pos.y += vel.y;
+            }
+        }
+    }
+
     let mut world = World::new();
+
+    macro_rules! register {
+        ($world: ident, $($e: expr => $t: ty),+) => {
+            {
+                let mut table = world.res.entry().or_insert_with(|| ReflectionTable::new());
+                $(
+                    table.register(&<$t>::default());
+                )+
+            }
+            {
+                let mut table = world.res.entry().or_insert_with(|| ResourceTable::new());
+                $(
+                    table.register::<$t>($e);
+                )+
+            }
+        }
+    }
+
+    let vm = new_vm();
+
+    vm.register_type::<GluonEntitiesPtr>("Entities", &[])?;
+    vm.register_type::<GluonEntity>("Entity", &[])?;
+    vm.register_type::<GluonLazyUpdatePtr>("LazyUpdate", &[])?;
+
+    register!(world,
+        "dt" => DeltaTime,
+        "entities" => EntitiesRes,
+        "lazy_update" => LazyUpdate
+    );
     {
         let mut table = world.res.entry().or_insert_with(|| ReflectionTable::new());
 
         table.register(&MaskedStorage::<Pos>::new(Default::default()));
+        table.register(&MaskedStorage::<Vel>::new(Default::default()));
         table.register(&MaskedStorage::<Bar>::new(Default::default()));
-        table.register(&DeltaTime(0.));
-        table.register(&EntitiesRes::default());
-        table.register(&LazyUpdate::default());
     }
 
     world.res.entry().or_insert_with(|| DeltaTime(0.1));
     {
         let mut table = world.res.entry().or_insert_with(|| ResourceTable::new());
         table.register_component::<Pos>("pos");
+        table.register_component::<Vel>("vel");
         table.register_component::<Bar>("bar");
-        table.register::<DeltaTime>("dt");
-        table.register::<EntitiesRes>("entities");
-        table.register::<LazyUpdate>("lazy_update");
     }
     world.register::<Pos>();
+    world.register::<Vel>();
     world.register::<Bar>();
 
     world
@@ -635,14 +687,9 @@ pub fn main() -> Result<(), failure::Error> {
 
     let mut dispatcher = DispatcherBuilder::new()
         .with(NormalSys, "normal", &[])
+        .with(Movement, "movement", &[])
         .build();
     dispatcher.setup(&mut world.res);
-
-    let vm = new_vm();
-
-    vm.register_type::<GluonEntitiesPtr>("Entities", &[])?;
-    vm.register_type::<GluonEntity>("Entity", &[])?;
-    vm.register_type::<GluonLazyUpdatePtr>("LazyUpdate", &[])?;
 
     add_extern_module(&vm, "entity", load);
 
