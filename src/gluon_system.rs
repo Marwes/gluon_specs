@@ -40,29 +40,50 @@ type GluonAny = OpaqueValue<RootedThread, Hole>;
 #[derive(Debug, Clone, Default, Getable, Pushable)]
 struct DeltaTime(f64);
 
-#[derive(Debug, Default, Userdata)]
-#[repr(transparent)]
-struct GluonEntities(EntitiesRes);
+macro_rules! ptr_impl {
+    (
+        unsafe
+        $(#[$attr:meta])*
+        $extern_name: ident $name: ident $ptr_name: ident
+    ) => {
+        $(#[$attr])*
+        #[derive(Default, Userdata)]
+        #[repr(transparent)]
+        struct $name($extern_name);
 
-#[derive(Debug, Userdata)]
-struct GluonEntitiesPtr(*const EntitiesRes);
-unsafe impl Send for GluonEntitiesPtr {}
-unsafe impl Sync for GluonEntitiesPtr {}
+        #[derive(Debug, Userdata)]
+        struct $ptr_name(*const $extern_name);
+        unsafe impl Send for $ptr_name {}
+        unsafe impl Sync for $ptr_name {}
 
-#[derive(Default, Userdata)]
-#[repr(transparent)]
-struct GluonLazyUpdate(LazyUpdate);
+        impl Reflection for $extern_name {
+            unsafe fn open(&self, _entities: Fetch<EntitiesRes>) -> Option<&BitSet> {
+                None
+            }
+
+            unsafe fn get(&self, _entities: Fetch<EntitiesRes>, _index: u32) -> &GluonMarshal {
+                mem::transmute::<&Self, &$name>(self)
+            }
+
+            unsafe fn get_mut(
+                &mut self,
+                _entities: Fetch<EntitiesRes>,
+                _index: u32,
+            ) -> &mut GluonMarshal {
+                mem::transmute::<&mut Self, &mut $name>(self)
+            }
+        }
+    };
+}
+
+ptr_impl!(unsafe #[derive(Debug)] EntitiesRes GluonEntities GluonEntitiesPtr);
+ptr_impl!(unsafe LazyUpdate GluonLazyUpdate GluonLazyUpdatePtr);
 
 impl fmt::Debug for GluonLazyUpdate {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "LazyUpdate(..)")
     }
 }
-
-#[derive(Debug, Userdata)]
-struct GluonLazyUpdatePtr(*const LazyUpdate);
-unsafe impl Send for GluonLazyUpdatePtr {}
-unsafe impl Sync for GluonLazyUpdatePtr {}
 
 /// Some resource
 #[derive(Debug, Default, Getable, Pushable, Clone, Component)]
@@ -205,34 +226,6 @@ impl Reflection for DeltaTime {
 
     unsafe fn get_mut(&mut self, _entities: Fetch<EntitiesRes>, _index: u32) -> &mut GluonMarshal {
         self
-    }
-}
-
-impl Reflection for EntitiesRes {
-    unsafe fn open(&self, _entities: Fetch<EntitiesRes>) -> Option<&BitSet> {
-        None
-    }
-
-    unsafe fn get(&self, _entities: Fetch<EntitiesRes>, _index: u32) -> &GluonMarshal {
-        mem::transmute::<&EntitiesRes, &GluonEntities>(self)
-    }
-
-    unsafe fn get_mut(&mut self, _entities: Fetch<EntitiesRes>, _index: u32) -> &mut GluonMarshal {
-        mem::transmute::<&mut EntitiesRes, &mut GluonEntities>(self)
-    }
-}
-
-impl Reflection for LazyUpdate {
-    unsafe fn open(&self, _entities: Fetch<EntitiesRes>) -> Option<&BitSet> {
-        None
-    }
-
-    unsafe fn get(&self, _entities: Fetch<EntitiesRes>, _index: u32) -> &GluonMarshal {
-        mem::transmute::<&Self, &GluonLazyUpdate>(self)
-    }
-
-    unsafe fn get_mut(&mut self, _entities: Fetch<EntitiesRes>, _index: u32) -> &mut GluonMarshal {
-        mem::transmute::<&mut Self, &mut GluonLazyUpdate>(self)
     }
 }
 
@@ -562,7 +555,7 @@ fn create_script_sys(thread: &Thread, res: &Resources) -> Result<DynamicSystem, 
         table
             .get(r)
             .cloned()
-            .ok_or_else(|| failure::err_msg(format!("Component `{}` does not exist", r)))
+            .ok_or_else(|| failure::err_msg(format!("Resource `{}` does not exist", r)))
     };
 
     let sys = DynamicSystem {
