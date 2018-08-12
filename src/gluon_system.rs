@@ -19,7 +19,7 @@ use shred::{
 };
 
 use gluon::{
-    base::types::ArcType,
+    base::types::{ArcType, Type},
     import::add_extern_module,
     new_vm,
     vm::{
@@ -557,6 +557,24 @@ fn create_script_sys(
         Some(x) => x,
         None => return Err(failure::err_msg("Expected function type")),
     };
+    match **read_type {
+        Type::Record(_) => (),
+        _ => {
+            return Err(failure::err_msg(format!(
+                "Argument type is not a record\nActual: {}",
+                read_type
+            )))
+        }
+    }
+    match **write_type {
+        Type::Record(_) => (),
+        _ => {
+            return Err(failure::err_msg(format!(
+                "Return type is not a record\nActual: {}",
+                write_type
+            )))
+        }
+    }
     let reads = read_type
         .row_iter()
         .map(|field| field.name.declared_name())
@@ -743,9 +761,13 @@ mod tests {
         world
     }
 
-    fn test_script_sys(vm: &Thread, res: &Resources, script: &str) -> DynamicSystem {
-        let (function, typ) = Compiler::new().run_expr(&vm, "update", script).unwrap();
-        create_script_sys(vm, res, function, &typ).unwrap()
+    fn test_script_sys(
+        vm: &Thread,
+        res: &Resources,
+        script: &str,
+    ) -> Result<DynamicSystem, failure::Error> {
+        let (function, typ) = Compiler::new().run_expr(&vm, "update", script)?;
+        create_script_sys(vm, res, function, &typ)
     }
 
     #[test]
@@ -755,7 +777,7 @@ mod tests {
         let vm = new_vm();
 
         let script = r#"let f: () -> () = \x -> x in f"#;
-        let script0 = test_script_sys(&vm, &world.res, script);
+        let script0 = test_script_sys(&vm, &world.res, script).unwrap();
         let mut scripts = DispatcherBuilder::new()
             .with(script0, "script0", &[])
             .build();
@@ -777,7 +799,7 @@ mod tests {
         let vm = new_vm();
 
         let script = r#"let f: { test : Int } -> _ = \x -> { test =  x.test + 1 } in f"#;
-        let script0 = test_script_sys(&vm, &world.res, script);
+        let script0 = test_script_sys(&vm, &world.res, script).unwrap();
         let mut scripts = DispatcherBuilder::new()
             .with(script0, "script0", &[])
             .build();
@@ -802,9 +824,9 @@ mod tests {
         let vm = new_vm();
 
         let script = r#"let f: { test : Int } -> _ = \x -> { test =  x.test + 1 } in f"#;
-        let script0 = test_script_sys(&vm, &world.res, script);
+        let script0 = test_script_sys(&vm, &world.res, script).unwrap();
         let script = r#"let f: { test : Int } -> _ = \x -> { test =  x.test + 10 } in f"#;
-        let script1 = test_script_sys(&vm, &world.res, script);
+        let script1 = test_script_sys(&vm, &world.res, script).unwrap();
         let mut scripts = DispatcherBuilder::new()
             .with(script0, "script0", &[])
             .with(script1, "script1", &[])
@@ -815,5 +837,35 @@ mod tests {
         scripts.dispatch(&mut world.res);
 
         assert_eq!(world.read_storage::<Test>().get(entity), Some(&Test(12)));
+    }
+
+    #[test]
+    fn missing_component() {
+        let world = test_world();
+
+        let vm = new_vm();
+
+        let script = r#"let f: { test : Int } -> _ = \x -> { test =  x.test + 1 } in f"#;
+        assert!(test_script_sys(&vm, &world.res, script).is_err());
+    }
+
+    #[test]
+    fn wrong_argument_type() {
+        let world = test_world();
+
+        let vm = new_vm();
+
+        let script = r#"let f: Int -> _ = \x -> () in f"#;
+        assert!(test_script_sys(&vm, &world.res, script).is_err());
+    }
+
+    #[test]
+    fn wrong_return_type() {
+        let world = test_world();
+
+        let vm = new_vm();
+
+        let script = r#"let f: () -> Int = \x -> 1 in f"#;
+        assert!(test_script_sys(&vm, &world.res, script).is_err());
     }
 }
