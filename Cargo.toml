@@ -8,7 +8,7 @@ readme = "README.md"
 [dependencies]
 # Game stuff
 ggez = "0.4"
-ggez-goodies = { git = "https://github.com/ggez/ggez-goodies", branch = "master" }
+ggez-goodies = "0.1"
 specs = "0.12"
 shred = "0.7"
 specs-derive = "0.1"

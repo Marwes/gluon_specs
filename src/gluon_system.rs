@@ -312,7 +312,7 @@ fn reflection_bitset<'a>(
                     }
                     None => set.clone(),
                 })
-            }).unwrap()
+            }).unwrap_or_default()
     }
 }
 
@@ -544,11 +544,15 @@ impl<'a> DynamicSystemData<'a> for ScriptSystemData<'a> {
     }
 }
 
-fn create_script_sys(thread: &Thread, res: &Resources) -> Result<DynamicSystem, failure::Error> {
+fn create_script_sys(
+    thread: &Thread,
+    res: &Resources,
+    function: OwnedFunction<fn(GluonAny) -> GluonAny>,
+    update_type: &ArcType,
+) -> Result<DynamicSystem, failure::Error> {
     // -- how we create the system --
     let table = res.fetch::<ResourceTable>();
 
-    let update_type = thread.get_global_type("update")?;
     let (read_type, write_type) = match update_type.as_function() {
         Some(x) => x,
         None => return Err(failure::err_msg("Expected function type")),
@@ -561,7 +565,6 @@ fn create_script_sys(thread: &Thread, res: &Resources) -> Result<DynamicSystem, 
         .row_iter()
         .map(|field| field.name.declared_name())
         .collect::<Vec<_>>();
-    let function = thread.get_global::<OwnedFunction<fn(GluonAny) -> GluonAny>>("update")?;
 
     let get_resource = |r| {
         table
@@ -591,6 +594,11 @@ fn create_script_sys(thread: &Thread, res: &Resources) -> Result<DynamicSystem, 
     };
 
     Ok(sys)
+}
+
+fn init_resources(res: &mut Resources) {
+    res.entry().or_insert_with(|| ReflectionTable::new());
+    res.entry().or_insert_with(|| ResourceTable::new());
 }
 
 pub fn main() -> Result<(), failure::Error> {
@@ -626,6 +634,7 @@ pub fn main() -> Result<(), failure::Error> {
     }
 
     let mut world = World::new();
+    init_resources(&mut world.res);
 
     macro_rules! register {
         ($world: ident, $($e: expr => $t: ty),+) => {
@@ -694,8 +703,8 @@ pub fn main() -> Result<(), failure::Error> {
     add_extern_module(&vm, "entity", load);
 
     let script = fs::read_to_string("src/gluon_system.glu")?;
-    Compiler::new().load_script(&vm, "update", &script)?;
-    let script0 = create_script_sys(&vm, &world.res)?;
+    let (function, typ) = Compiler::new().run_expr(&vm, "update", &script)?;
+    let script0 = create_script_sys(&vm, &world.res, function, &typ)?;
 
     // it is recommended you create a second dispatcher dedicated to scripts,
     // that'll allow you to rebuild if necessary
@@ -711,4 +720,27 @@ pub fn main() -> Result<(), failure::Error> {
         world.maintain();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_system() {
+        let mut world = World::new();
+        init_resources(&mut world.res);
+
+        let vm = new_vm();
+
+        let (function, typ) = Compiler::new()
+            .run_expr(&vm, "update", r#"let f: () -> () = \x -> x in f"#)
+            .unwrap();
+        let script0 = create_script_sys(&vm, &world.res, function, &typ).unwrap();
+        let mut scripts = DispatcherBuilder::new()
+            .with(script0, "script0", &[])
+            .build();
+
+        scripts.dispatch(&mut world.res);
+    }
 }
