@@ -601,6 +601,45 @@ fn init_resources(res: &mut Resources) {
     res.entry().or_insert_with(|| ResourceTable::new());
 }
 
+macro_rules! register {
+    ($world: ident, $($e: expr => $t: ty),+) => {{
+        let ref mut world = $world;
+        {
+            let mut table = world.res.entry().or_insert_with(|| ReflectionTable::new());
+            $(
+                table.register(&<$t>::default());
+            )+
+        }
+        {
+            let mut table = world.res.entry().or_insert_with(|| ResourceTable::new());
+            $(
+                table.register::<$t>($e);
+            )+
+        }}
+    }
+}
+
+macro_rules! register_components {
+    ($world: ident, $($e: expr => $t: ty),+) => {{
+        let ref mut world = $world;
+        {
+            let mut table = world.res.entry().or_insert_with(|| ReflectionTable::new());
+            $(
+                table.register(&MaskedStorage::<$t>::default());
+            )+
+        }
+        {
+            let mut table = world.res.entry().or_insert_with(|| ResourceTable::new());
+            $(
+                table.register_component::<$t>($e);
+            )+
+        }
+        $(
+            world.register::<$t>();
+        )+
+    }}
+}
+
 pub fn main() -> Result<(), failure::Error> {
     /// Another resource
     #[derive(Debug, Default, Getable, Pushable, Clone, Component)]
@@ -636,23 +675,6 @@ pub fn main() -> Result<(), failure::Error> {
     let mut world = World::new();
     init_resources(&mut world.res);
 
-    macro_rules! register {
-        ($world: ident, $($e: expr => $t: ty),+) => {
-            {
-                let mut table = world.res.entry().or_insert_with(|| ReflectionTable::new());
-                $(
-                    table.register(&<$t>::default());
-                )+
-            }
-            {
-                let mut table = world.res.entry().or_insert_with(|| ResourceTable::new());
-                $(
-                    table.register::<$t>($e);
-                )+
-            }
-        }
-    }
-
     let vm = new_vm();
 
     vm.register_type::<GluonEntitiesPtr>("Entities", &[])?;
@@ -664,24 +686,13 @@ pub fn main() -> Result<(), failure::Error> {
         "entities" => EntitiesRes,
         "lazy_update" => LazyUpdate
     );
-    {
-        let mut table = world.res.entry().or_insert_with(|| ReflectionTable::new());
-
-        table.register(&MaskedStorage::<Pos>::new(Default::default()));
-        table.register(&MaskedStorage::<Vel>::new(Default::default()));
-        table.register(&MaskedStorage::<Bar>::new(Default::default()));
-    }
+    register_components!(world,
+        "pos" => Pos,
+        "vel" => Vel,
+        "bar" => Bar
+    );
 
     world.res.entry().or_insert_with(|| DeltaTime(0.1));
-    {
-        let mut table = world.res.entry().or_insert_with(|| ResourceTable::new());
-        table.register_component::<Pos>("pos");
-        table.register_component::<Vel>("vel");
-        table.register_component::<Bar>("bar");
-    }
-    world.register::<Pos>();
-    world.register::<Vel>();
-    world.register::<Bar>();
 
     world
         .create_entity()
@@ -742,5 +753,35 @@ mod tests {
             .build();
 
         scripts.dispatch(&mut world.res);
+    }
+
+    #[test]
+    fn update_component() {
+        let mut world = World::new();
+        init_resources(&mut world.res);
+
+        #[derive(Debug, Default, Clone, PartialEq, Getable, Pushable, Component)]
+        struct Test(i32);
+
+        register_components!{world,
+            "test" => Test
+        }
+
+        let vm = new_vm();
+
+        let script = r#"let f: { test : Int } -> _ = \x -> { test =  x.test + 1 } in f"#;
+        let (function, typ) = Compiler::new().run_expr(&vm, "update", script).unwrap();
+        let script0 = create_script_sys(&vm, &world.res, function, &typ).unwrap();
+        let mut scripts = DispatcherBuilder::new()
+            .with(script0, "script0", &[])
+            .build();
+
+        let entity = world.create_entity().with(Test(1)).build();
+
+        for _ in 0..2 {
+            scripts.dispatch(&mut world.res);
+        }
+
+        assert_eq!(world.read_storage::<Test>().get(entity), Some(&Test(3)));
     }
 }
