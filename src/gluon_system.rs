@@ -737,17 +737,25 @@ pub fn main() -> Result<(), failure::Error> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn empty_system() {
+    fn test_world() -> World {
         let mut world = World::new();
         init_resources(&mut world.res);
+        world
+    }
+
+    fn test_script_sys(vm: &Thread, res: &Resources, script: &str) -> DynamicSystem {
+        let (function, typ) = Compiler::new().run_expr(&vm, "update", script).unwrap();
+        create_script_sys(vm, res, function, &typ).unwrap()
+    }
+
+    #[test]
+    fn empty_system() {
+        let mut world = test_world();
 
         let vm = new_vm();
 
-        let (function, typ) = Compiler::new()
-            .run_expr(&vm, "update", r#"let f: () -> () = \x -> x in f"#)
-            .unwrap();
-        let script0 = create_script_sys(&vm, &world.res, function, &typ).unwrap();
+        let script = r#"let f: () -> () = \x -> x in f"#;
+        let script0 = test_script_sys(&vm, &world.res, script);
         let mut scripts = DispatcherBuilder::new()
             .with(script0, "script0", &[])
             .build();
@@ -755,13 +763,12 @@ mod tests {
         scripts.dispatch(&mut world.res);
     }
 
+    #[derive(Debug, Default, Clone, PartialEq, Getable, Pushable, Component)]
+    struct Test(i32);
+
     #[test]
     fn update_component() {
-        let mut world = World::new();
-        init_resources(&mut world.res);
-
-        #[derive(Debug, Default, Clone, PartialEq, Getable, Pushable, Component)]
-        struct Test(i32);
+        let mut world = test_world();
 
         register_components!{world,
             "test" => Test
@@ -770,8 +777,7 @@ mod tests {
         let vm = new_vm();
 
         let script = r#"let f: { test : Int } -> _ = \x -> { test =  x.test + 1 } in f"#;
-        let (function, typ) = Compiler::new().run_expr(&vm, "update", script).unwrap();
-        let script0 = create_script_sys(&vm, &world.res, function, &typ).unwrap();
+        let script0 = test_script_sys(&vm, &world.res, script);
         let mut scripts = DispatcherBuilder::new()
             .with(script0, "script0", &[])
             .build();
@@ -783,5 +789,31 @@ mod tests {
         }
 
         assert_eq!(world.read_storage::<Test>().get(entity), Some(&Test(3)));
+    }
+
+    #[test]
+    fn multiple_systems() {
+        let mut world = test_world();
+
+        register_components!{world,
+            "test" => Test
+        }
+
+        let vm = new_vm();
+
+        let script = r#"let f: { test : Int } -> _ = \x -> { test =  x.test + 1 } in f"#;
+        let script0 = test_script_sys(&vm, &world.res, script);
+        let script = r#"let f: { test : Int } -> _ = \x -> { test =  x.test + 10 } in f"#;
+        let script1 = test_script_sys(&vm, &world.res, script);
+        let mut scripts = DispatcherBuilder::new()
+            .with(script0, "script0", &[])
+            .with(script1, "script1", &[])
+            .build();
+
+        let entity = world.create_entity().with(Test(1)).build();
+
+        scripts.dispatch(&mut world.res);
+
+        assert_eq!(world.read_storage::<Test>().get(entity), Some(&Test(12)));
     }
 }
