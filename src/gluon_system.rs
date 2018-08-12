@@ -73,11 +73,32 @@ macro_rules! ptr_impl {
                 mem::transmute::<&mut Self, &mut $name>(self)
             }
         }
+
+
+        impl GluonMarshal for $name {
+            fn to_gluon(&self, thread: &Thread) {
+                eprintln!("Push {}", stringify!($extern_name));
+                UserdataValue($ptr_name(&self.0 as *const _))
+                    .push(&mut thread.current_context())
+                    .unwrap()
+            }
+
+            fn from_gluon(&mut self, thread: &Thread, variants: Variants) {
+                *self = Self::new_value(thread, variants);
+            }
+
+            fn new_value(_thread: &Thread, _variants: Variants) -> Self {
+                unimplemented!()
+            }
+        }
+
     };
 }
 
 ptr_impl!(unsafe #[derive(Debug)] EntitiesRes GluonEntities GluonEntitiesPtr);
 ptr_impl!(unsafe LazyUpdate GluonLazyUpdate GluonLazyUpdatePtr);
+ptr_impl!(unsafe #[derive(Debug)] ResourceTable GluonResourceTable GluonResourceTablePtr);
+ptr_impl!(unsafe #[derive(Debug)] ReflectionTable GluonReflectionTable GluonReflectionTablePtr);
 
 impl fmt::Debug for GluonLazyUpdate {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -154,11 +175,11 @@ impl<'a> System<'a> for DynamicSystem {
                     ReadType::Read(resource) => {
                         let res = Box::as_ref(resource);
 
-                        meta.get(res).expect("Not registered in meta table")}
+                        meta.reflections.get(res).expect("Not registered in meta table")}
                     ReadType::Write(i) => {
                         let res = Box::as_ref(&writes[*i]);
 
-                        meta.get(res).expect("Not registered in meta table")
+                        meta.reflections.get(res).expect("Not registered in meta table")
                     }
                 }
             }).collect();
@@ -166,7 +187,10 @@ impl<'a> System<'a> for DynamicSystem {
                 reads.iter().cloned().chain(writes.iter().map(|resource| {
                     let res = Box::as_ref(resource);
 
-                    let res: &Reflection = meta.get(res).expect("Not registered in meta table");
+                    let res: &Reflection = meta
+                        .reflections
+                        .get(res)
+                        .expect("Not registered in meta table");
 
                     res
                 })),
@@ -188,7 +212,10 @@ impl<'a> System<'a> for DynamicSystem {
             .map(|resource| {
                 let res = Box::as_mut(resource);
 
-                let res: &mut Reflection = meta.get_mut(res).expect("Not registered in meta table");
+                let res: &mut Reflection = meta
+                    .reflections
+                    .get_mut(res)
+                    .expect("Not registered in meta table");
 
                 res
             }).collect();
@@ -211,6 +238,13 @@ trait Reflection {
     unsafe fn open(&self, entities: Fetch<EntitiesRes>) -> Option<&BitSet>;
     unsafe fn get(&self, entities: Fetch<EntitiesRes>, index: u32) -> &GluonMarshal;
     unsafe fn get_mut(&mut self, entities: Fetch<EntitiesRes>, index: u32) -> &mut GluonMarshal;
+    fn add_component(lazy: &LazyUpdate, thread: &Thread, entity: Entity, value: Variants)
+    where
+        Self: Sized,
+    {
+        let _ = (lazy, thread, entity, value);
+        unimplemented!()
+    }
 }
 
 unsafe fn forget_lifetime<'a, 'b, T: ?Sized>(x: &'a T) -> &'b T {
@@ -237,7 +271,7 @@ impl Reflection for DeltaTime {
 
 impl<T> Reflection for MaskedStorage<T>
 where
-    T: Component + GluonMarshal,
+    T: Component + GluonMarshal + Send + Sync,
 {
     unsafe fn open(&self, entities: Fetch<EntitiesRes>) -> Option<&BitSet> {
         // mask is actually bound to `self`
@@ -258,6 +292,13 @@ where
                 .unprotected_storage_mut()
                 .get_mut(index),
         )
+    }
+
+    fn add_component(lazy: &LazyUpdate, thread: &Thread, entity: Entity, value: Variants)
+    where
+        Self: Sized,
+    {
+        lazy.insert(entity, T::new_value(thread, value));
     }
 }
 
@@ -362,17 +403,18 @@ fn create_entity(ptr: &GluonEntitiesPtr) -> GluonEntity {
 
 fn add_component(
     WithVM { vm, value: lazy }: WithVM<&GluonLazyUpdatePtr>,
+    reflection_table: &GluonReflectionTablePtr,
     name: &str,
     component: OpaqueRef<generic::A>,
     entity: OpaqueRef<GluonEntity>,
 ) -> RuntimeResult<(), &'static str> {
     let lazy = unsafe { &*lazy.0 };
+    let reflection_table = unsafe { &*reflection_table.0 };
     let entity = entity.0.clone();
-    RuntimeResult::Return(match name {
-        "pos" => lazy.insert(entity, Pos::from_value(vm, component.get_variant())),
-        "vel" => lazy.insert(entity, Vel::from_value(vm, component.get_variant())),
-        _ => return RuntimeResult::Panic("Unknown component"),
-    })
+    match reflection_table.add_component.get(name) {
+        Some(f) => RuntimeResult::Return(f(lazy, vm, entity, component.get_variant())),
+        None => RuntimeResult::Panic("Unknown component"),
+    }
 }
 
 fn load(vm: &Thread) -> vm::Result<ExternModule> {
@@ -380,7 +422,7 @@ fn load(vm: &Thread) -> vm::Result<ExternModule> {
         vm,
         record! {
             create => primitive!(1 create_entity),
-            add_component => primitive!(4 add_component)
+            add_component => primitive!(5 add_component)
         },
     )
 }
@@ -391,32 +433,10 @@ trait GluonMarshal {
     fn to_gluon(&self, thread: &Thread);
 
     fn from_gluon(&mut self, thread: &Thread, variants: Variants);
-}
 
-impl GluonMarshal for GluonEntities {
-    fn to_gluon(&self, thread: &Thread) {
-        eprintln!("Push entities");
-        UserdataValue(GluonEntitiesPtr(&self.0 as *const _))
-            .push(&mut thread.current_context())
-            .unwrap()
-    }
-
-    fn from_gluon(&mut self, _thread: &Thread, _variants: Variants) {
-        unimplemented!()
-    }
-}
-
-impl GluonMarshal for GluonLazyUpdate {
-    fn to_gluon(&self, thread: &Thread) {
-        eprintln!("Push updater");
-        UserdataValue(GluonLazyUpdatePtr(&self.0 as *const _))
-            .push(&mut thread.current_context())
-            .unwrap()
-    }
-
-    fn from_gluon(&mut self, _thread: &Thread, _variants: Variants) {
-        unimplemented!()
-    }
+    fn new_value(thread: &Thread, variants: Variants) -> Self
+    where
+        Self: Sized;
 }
 
 impl<T> GluonMarshal for T
@@ -430,8 +450,13 @@ where
     }
 
     fn from_gluon(&mut self, thread: &Thread, variants: Variants) {
-        *self = Getable::from_value(thread, variants);
-        eprintln!("Return {:?}", self);
+        *self = Self::new_value(thread, variants);
+    }
+
+    fn new_value(thread: &Thread, variants: Variants) -> Self {
+        let self_ = Getable::from_value(thread, variants);
+        eprintln!("Return {:?}", self_);
+        self_
     }
 }
 
@@ -449,7 +474,29 @@ where
     }
 }
 
-type ReflectionTable = MetaTable<Reflection>;
+#[derive(Default)]
+struct ReflectionTable {
+    reflections: MetaTable<Reflection>,
+    add_component: HashMap<String, fn(&LazyUpdate, &Thread, Entity, Variants)>,
+}
+
+impl fmt::Debug for ReflectionTable {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("ReflectionTable").finish()
+    }
+}
+
+impl ReflectionTable {
+    fn register<R>(&mut self, name: &str, r: &R)
+    where
+        R: Reflection + Resource + Sized,
+        Reflection: CastFrom<R>,
+    {
+        self.reflections.register(r);
+        self.add_component
+            .insert(name.to_string(), R::add_component);
+    }
+}
 
 /// Maps resource names to resource ids.
 #[derive(Debug, Default)]
@@ -615,7 +662,7 @@ fn create_script_sys(
 }
 
 fn init_resources(res: &mut Resources) {
-    res.entry().or_insert_with(|| ReflectionTable::new());
+    res.entry().or_insert_with(|| ReflectionTable::default());
     res.entry().or_insert_with(|| ResourceTable::new());
 }
 
@@ -623,9 +670,9 @@ macro_rules! register {
     ($world: ident, $($e: expr => $t: ty),+) => {{
         let ref mut world = $world;
         {
-            let mut table = world.res.entry().or_insert_with(|| ReflectionTable::new());
+            let mut table = world.res.entry().or_insert_with(|| ReflectionTable::default());
             $(
-                table.register(&<$t>::default());
+                table.register($e, &<$t>::default());
             )+
         }
         {
@@ -641,9 +688,9 @@ macro_rules! register_components {
     ($world: ident, $($e: expr => $t: ty),+) => {{
         let ref mut world = $world;
         {
-            let mut table = world.res.entry().or_insert_with(|| ReflectionTable::new());
+            let mut table = world.res.entry().or_insert_with(|| ReflectionTable::default());
             $(
-                table.register(&MaskedStorage::<$t>::default());
+                table.register($e, &MaskedStorage::<$t>::default());
             )+
         }
         {
@@ -698,11 +745,15 @@ pub fn main() -> Result<(), failure::Error> {
     vm.register_type::<GluonEntitiesPtr>("Entities", &[])?;
     vm.register_type::<GluonEntity>("Entity", &[])?;
     vm.register_type::<GluonLazyUpdatePtr>("LazyUpdate", &[])?;
+    vm.register_type::<GluonResourceTablePtr>("ResourceTable", &[])?;
+    vm.register_type::<GluonReflectionTablePtr>("ReflectionTable", &[])?;
 
     register!(world,
         "dt" => DeltaTime,
         "entities" => EntitiesRes,
-        "lazy_update" => LazyUpdate
+        "lazy_update" => LazyUpdate,
+        "reflection_table" => ReflectionTable,
+        "resource_table" => ResourceTable
     );
     register_components!(world,
         "pos" => Pos,

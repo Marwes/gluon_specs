@@ -1,8 +1,22 @@
 let { negate } = import! std.num
 let entity = import! entity
+
+#[implicit]
+type AddComponent a = { component_name : String }
     
 #[derive(Eq, Show)]
 type Pos = { x : Float, y : Float }
+
+let new_pos x y : Float -> Float -> Pos = { x, y }
+let pos_component : AddComponent Pos = { component_name = "pos" }
+
+#[derive(Eq, Show)]
+type Vel = { x : Float, y : Float }
+
+let new_vel x y : Float -> Float -> Pos = { x, y }
+
+let add_component ?c l r a e : [AddComponent a] -> LazyUpdate -> ReflectionTable -> a -> Entity -> () =
+    entity.add_component l r c.component_name a e
 
 let num_Pos : Num Pos = {
     ord = { eq = eq_Pos, compare = \_ _ -> error "Unimplemented" },
@@ -13,11 +27,12 @@ let num_Pos : Num Pos = {
     negate = \x -> { x = negate x.x, y = negate x.y },
 }
 
-let update r : { pos : Pos, dt: Float, entities : Entities, lazy_update: LazyUpdate } -> { pos : Pos } =
-    let { pos, dt, entities, lazy_update } = r
+
+let update r : { pos : Pos, dt: Float, entities : Entities, lazy_update: LazyUpdate, reflection_table: ReflectionTable } -> { pos : Pos } =
+    let { pos, dt, entities, lazy_update, reflection_table } = r
     let e = entity.create entities
-    entity.add_component lazy_update "pos" pos e
-    entity.add_component lazy_update "vel" pos e
+    add_component lazy_update reflection_table pos e
+    add_component ?{ component_name = "vel" } lazy_update reflection_table pos e
     { pos = pos + { x = 0., y = 1.0 * dt } }
 
 update
