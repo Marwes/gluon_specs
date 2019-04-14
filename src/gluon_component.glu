@@ -1,0 +1,22 @@
+
+#[implicit]
+type AddComponent a = { component_name : String }
+    
+#[derive(Eq, Show)]
+type Pos = { x : Float, y : Float }
+
+let new_pos x y : Float -> Float -> Pos = { x, y }
+let pos_component : AddComponent Pos = { component_name = "pos" }
+
+#[derive(Eq, Show)]
+type Vel = { x : Float, y : Float }
+
+{
+    Pos,
+    Vel,
+
+    AddComponent,
+
+    new_pos,
+    pos_component,
+}

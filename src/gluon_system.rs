@@ -19,25 +19,24 @@ use shred::{
 };
 
 use gluon::{
-    base::types::{ArcType, Type},
+    base::types::{ArcType, Type, TypeExt},
     import::add_extern_module,
-    new_vm,
     vm::{
         self,
         api::{
             generic, Getable, Hole, OpaqueRef, OpaqueValue, OwnedFunction, Pushable, RuntimeResult,
-            UserdataValue, ValueRef, WithVM,
+            UserdataValue, ValueRef, VmType, WithVM,
         },
         internal::InternedStr,
         thread::ThreadInternal,
         ExternModule, Variants,
     },
-    Compiler, RootedThread, Thread,
+    Compiler, RootedThread, Thread, VmBuilder,
 };
 
 type GluonAny = OpaqueValue<RootedThread, Hole>;
 
-#[derive(Debug, Clone, Default, Getable, Pushable)]
+#[derive(Debug, Clone, Default, Getable, Pushable, VmType)]
 struct DeltaTime(f64);
 
 macro_rules! ptr_impl {
@@ -57,17 +56,17 @@ macro_rules! ptr_impl {
         unsafe impl Sync for $ptr_name {}
 
         impl Reflection for $extern_name {
-            unsafe fn open(&self, _entities: Fetch<EntitiesRes>) -> Option<&BitSet> {
+            unsafe fn open(&self, _entities: &Fetch<EntitiesRes>) -> Option<&BitSet> {
                 None
             }
 
-            unsafe fn get(&self, _entities: Fetch<EntitiesRes>, _index: u32) -> &GluonMarshal {
+            unsafe fn get(&self, _entities: &Fetch<EntitiesRes>, _index: u32) -> &GluonMarshal {
                 mem::transmute::<&Self, &$name>(self)
             }
 
             unsafe fn get_mut(
                 &mut self,
-                _entities: Fetch<EntitiesRes>,
+                _entities: &Fetch<EntitiesRes>,
                 _index: u32,
             ) -> &mut GluonMarshal {
                 mem::transmute::<&mut Self, &mut $name>(self)
@@ -107,13 +106,15 @@ impl fmt::Debug for GluonLazyUpdate {
 }
 
 /// Some resource
-#[derive(Debug, Default, Getable, Pushable, Clone, Component)]
+#[derive(Debug, Default, Clone, Getable, Pushable, Component, VmType)]
+#[gluon(vm_type = "gluon_component.Pos")]
 struct Pos {
     x: f64,
     y: f64,
 }
 
-#[derive(Debug, Default, Getable, Pushable, Clone, Component)]
+#[derive(Debug, Default, Clone, Getable, Pushable, Component, VmType)]
+#[gluon(vm_type = "gluon_component.Vel")]
 struct Vel {
     x: f64,
     y: f64,
@@ -167,22 +168,31 @@ impl<'a> System<'a> for DynamicSystem {
 
         let mut outputs = Vec::new();
         {
-            let reads: Vec<&Reflection> = data.reads.iter().map(|resource| {
-                // explicitly use the type because we're dealing with `&Resource` which is implemented
-                // by a lot of types; we don't want to accidentally get a `&Box<Resource>` and cast
-                // it to a `&Resource`.
-                match resource {
-                    ReadType::Read(resource) => {
-                        let res = Box::as_ref(resource);
+            let reads: Vec<&Reflection> = data
+                .reads
+                .iter()
+                .map(|resource| {
+                    // explicitly use the type because we're dealing with `&Resource` which is implemented
+                    // by a lot of types; we don't want to accidentally get a `&Box<Resource>` and cast
+                    // it to a `&Resource`.
+                    match resource {
+                        ReadType::Read(resource) => {
+                            let res = Box::as_ref(resource);
 
-                        meta.reflections.get(res).expect("Not registered in meta table")}
-                    ReadType::Write(i) => {
-                        let res = Box::as_ref(&writes[*i]);
+                            meta.reflections
+                                .get(res)
+                                .expect("Not registered in meta table")
+                        }
+                        ReadType::Write(i) => {
+                            let res = Box::as_ref(&writes[*i]);
 
-                        meta.reflections.get(res).expect("Not registered in meta table")
+                            meta.reflections
+                                .get(res)
+                                .expect("Not registered in meta table")
+                        }
                     }
-                }
-            }).collect();
+                })
+                .collect();
             mask = reflection_bitset(
                 reads.iter().cloned().chain(writes.iter().map(|resource| {
                     let res = Box::as_ref(resource);
@@ -194,14 +204,12 @@ impl<'a> System<'a> for DynamicSystem {
 
                     res
                 })),
-                entities.clone(),
+                &entities,
             );
 
             let thread = self.script.vm().root_thread();
 
-            for input in
-                GluonJoin(&reads, entities.clone(), &thread, &data.read_fields, &mask).join()
-            {
+            for input in GluonJoin(&reads, &entities, &thread, &data.read_fields, &mask).join() {
                 let value = self.script.call(input).unwrap();
                 Vec::push(&mut outputs, value);
             }
@@ -218,10 +226,11 @@ impl<'a> System<'a> for DynamicSystem {
                     .expect("Not registered in meta table");
 
                 res
-            }).collect();
+            })
+            .collect();
 
         outputs.reverse();
-        let writes = GluonJoinMut(&mut writes, outputs, entities.clone(), &mask);
+        let writes = GluonJoinMut(&mut writes, outputs, &entities, &mask);
         for () in writes.join() {}
     }
 
@@ -235,9 +244,9 @@ impl<'a> System<'a> for DynamicSystem {
 }
 
 trait Reflection {
-    unsafe fn open(&self, entities: Fetch<EntitiesRes>) -> Option<&BitSet>;
-    unsafe fn get(&self, entities: Fetch<EntitiesRes>, index: u32) -> &GluonMarshal;
-    unsafe fn get_mut(&mut self, entities: Fetch<EntitiesRes>, index: u32) -> &mut GluonMarshal;
+    unsafe fn open(&self, entities: &Fetch<EntitiesRes>) -> Option<&BitSet>;
+    unsafe fn get(&self, entities: &Fetch<EntitiesRes>, index: u32) -> &GluonMarshal;
+    unsafe fn get_mut(&mut self, entities: &Fetch<EntitiesRes>, index: u32) -> &mut GluonMarshal;
     fn add_component(lazy: &LazyUpdate, thread: &Thread, entity: Entity, value: Variants)
     where
         Self: Sized,
@@ -256,15 +265,15 @@ unsafe fn forget_lifetime_mut<'a, 'b, T: ?Sized>(x: &'a mut T) -> &'b mut T {
 }
 
 impl Reflection for DeltaTime {
-    unsafe fn open(&self, _entities: Fetch<EntitiesRes>) -> Option<&BitSet> {
+    unsafe fn open(&self, _entities: &Fetch<EntitiesRes>) -> Option<&BitSet> {
         None
     }
 
-    unsafe fn get(&self, _entities: Fetch<EntitiesRes>, _index: u32) -> &GluonMarshal {
+    unsafe fn get(&self, _entities: &Fetch<EntitiesRes>, _index: u32) -> &GluonMarshal {
         self
     }
 
-    unsafe fn get_mut(&mut self, _entities: Fetch<EntitiesRes>, _index: u32) -> &mut GluonMarshal {
+    unsafe fn get_mut(&mut self, _entities: &Fetch<EntitiesRes>, _index: u32) -> &mut GluonMarshal {
         self
     }
 }
@@ -273,12 +282,12 @@ impl<T> Reflection for MaskedStorage<T>
 where
     T: Component + GluonMarshal + Send + Sync,
 {
-    unsafe fn open(&self, entities: Fetch<EntitiesRes>) -> Option<&BitSet> {
+    unsafe fn open(&self, entities: &Fetch<EntitiesRes>) -> Option<&BitSet> {
         // mask is actually bound to `self`
         Some(forget_lifetime(Storage::new(entities, self).mask()))
     }
 
-    unsafe fn get(&self, entities: Fetch<EntitiesRes>, index: u32) -> &GluonMarshal {
+    unsafe fn get(&self, entities: &Fetch<EntitiesRes>, index: u32) -> &GluonMarshal {
         forget_lifetime(
             Storage::new(entities, self)
                 .unprotected_storage()
@@ -286,7 +295,7 @@ where
         )
     }
 
-    unsafe fn get_mut(&mut self, entities: Fetch<EntitiesRes>, index: u32) -> &mut GluonMarshal {
+    unsafe fn get_mut(&mut self, entities: &Fetch<EntitiesRes>, index: u32) -> &mut GluonMarshal {
         forget_lifetime_mut(
             Storage::new(entities, self)
                 .unprotected_storage_mut()
@@ -304,7 +313,7 @@ where
 
 struct GluonJoin<'a>(
     &'a [&'a Reflection],
-    Fetch<'a, EntitiesRes>,
+    &'a Fetch<'a, EntitiesRes>,
     &'a Thread,
     &'a [InternedStr],
     &'a BitSet,
@@ -340,7 +349,7 @@ impl<'a> Join for GluonJoin<'a> {
 
 fn reflection_bitset<'a>(
     iter: impl IntoIterator<Item = &'a Reflection>,
-    entities: Fetch<EntitiesRes>,
+    entities: &Fetch<EntitiesRes>,
 ) -> BitSet {
     unsafe {
         iter.into_iter()
@@ -353,14 +362,15 @@ fn reflection_bitset<'a>(
                     }
                     None => set.clone(),
                 })
-            }).unwrap_or_default()
+            })
+            .unwrap_or_default()
     }
 }
 
 struct GluonJoinMut<'a, 'e>(
     &'a mut [&'a mut Reflection],
     Vec<GluonAny>,
-    Fetch<'e, EntitiesRes>,
+    &'e Fetch<'e, EntitiesRes>,
     &'a BitSet,
 );
 
@@ -421,8 +431,8 @@ fn load(vm: &Thread) -> vm::Result<ExternModule> {
     ExternModule::new(
         vm,
         record! {
-            create => primitive!(1 create_entity),
-            add_component => primitive!(5 add_component)
+            create => primitive!(1, create_entity),
+            add_component => primitive!(5, add_component)
         },
     )
 }
@@ -501,7 +511,7 @@ impl ReflectionTable {
 /// Maps resource names to resource ids.
 #[derive(Debug, Default)]
 struct ResourceTable {
-    map: HashMap<String, ResourceId>,
+    map: HashMap<ArcType, ResourceId>,
 }
 
 impl ResourceTable {
@@ -511,16 +521,16 @@ impl ResourceTable {
         }
     }
 
-    fn register<T: Send + Sync + 'static>(&mut self, name: &str) {
+    fn register<T: Send + Sync + 'static>(&mut self, name: ArcType) {
         self.map.insert(name.to_owned(), ResourceId::new::<T>());
     }
 
-    fn register_component<T: Component>(&mut self, name: &str) {
+    fn register_component<T: Component>(&mut self, name: ArcType) {
         self.map
             .insert(name.to_owned(), ResourceId::new::<MaskedStorage<T>>());
     }
 
-    fn get(&self, name: &str) -> Option<&ResourceId> {
+    fn get(&self, name: &ArcType) -> Option<&ResourceId> {
         self.map.get(name)
     }
 }
@@ -552,7 +562,8 @@ impl<'a> DynamicSystemData<'a> for ScriptSystemData<'a> {
                 res.try_fetch_internal(id)
                     .expect("bug: the requested resource does not exist")
                     .borrow_mut()
-            }).collect();
+            })
+            .collect();
         let reads = access
             .reads
             .iter()
@@ -566,7 +577,8 @@ impl<'a> DynamicSystemData<'a> for ScriptSystemData<'a> {
                             .borrow(),
                     )
                 }
-            }).collect();
+            })
+            .collect();
 
         let read_fields = access
             .read_type
@@ -576,7 +588,8 @@ impl<'a> DynamicSystemData<'a> for ScriptSystemData<'a> {
                     .thread
                     .global_env()
                     .intern(field.name.declared_name())
-            }).collect::<Result<_, _>>()
+            })
+            .collect::<Result<_, _>>()
             .unwrap();
 
         let entities = res.fetch();
@@ -624,18 +637,21 @@ fn create_script_sys(
     }
     let reads = read_type
         .row_iter()
-        .map(|field| field.name.declared_name())
+        .map(|field| &field.typ)
         .collect::<Vec<_>>();
     let writes = write_type
         .row_iter()
-        .map(|field| field.name.declared_name())
+        .map(|field| &field.typ)
         .collect::<Vec<_>>();
 
     let get_resource = |r| {
-        table
-            .get(r)
-            .cloned()
-            .ok_or_else(|| failure::err_msg(format!("Resource `{}` does not exist", r)))
+        table.get(r).cloned().ok_or_else(|| {
+            failure::err_msg(format!(
+                "Resource `{:?}` does not exist {:?}",
+                r,
+                table.map.keys().collect::<Vec<_>>()
+            ))
+        })
     };
 
     let sys = DynamicSystem {
@@ -666,37 +682,19 @@ fn init_resources(res: &mut Resources) {
     res.entry().or_insert_with(|| ResourceTable::new());
 }
 
-macro_rules! register {
-    ($world: ident, $($e: expr => $t: ty),+) => {{
-        let ref mut world = $world;
-        {
-            let mut table = world.res.entry().or_insert_with(|| ReflectionTable::default());
-            $(
-                table.register($e, &<$t>::default());
-            )+
-        }
-        {
-            let mut table = world.res.entry().or_insert_with(|| ResourceTable::new());
-            $(
-                table.register::<$t>($e);
-            )+
-        }}
-    }
-}
-
 macro_rules! register_components {
-    ($world: ident, $($e: expr => $t: ty),+) => {{
+    ($world: expr, $thread: expr, $($t: ty),+) => {{
         let ref mut world = $world;
+        let ref thread = $thread;
         {
-            let mut table = world.res.entry().or_insert_with(|| ReflectionTable::default());
+            world.res.entry().or_insert_with(|| ReflectionTable::default());
+            world.res.entry().or_insert_with(|| ResourceTable::new());
+            let mut reflection_table = world.res.fetch_mut::<ReflectionTable>();
+            let mut resource_table = world.res.fetch_mut::<ResourceTable>();
             $(
-                table.register($e, &MaskedStorage::<$t>::default());
-            )+
-        }
-        {
-            let mut table = world.res.entry().or_insert_with(|| ResourceTable::new());
-            $(
-                table.register_component::<$t>($e);
+                reflection_table.register(stringify!($t), &MaskedStorage::<$t>::default());
+                let typ = thread.get_type::<$t>().unwrap();
+                resource_table.register_component::<$t>(typ);
             )+
         }
         $(
@@ -705,9 +703,38 @@ macro_rules! register_components {
     }}
 }
 
+macro_rules! register {
+    ($world: expr, $thread: expr, $($t: ty),+) => {{
+        let ref mut world = $world;
+        let ref thread = $thread;
+        {
+            world.res.entry().or_insert_with(|| ReflectionTable::default());
+            world.res.entry().or_insert_with(|| ResourceTable::new());
+            let mut reflection_table = world.res.fetch_mut::<ReflectionTable>();
+            let mut resource_table = world.res.fetch_mut::<ResourceTable>();
+            $(
+                reflection_table.register(stringify!($t), &<$t>::default());
+                let typ = thread.get_type::<$t>().unwrap();
+                resource_table.register::<$t>(typ);
+            )+
+        }
+    }}
+}
+
+fn register_struct_type<T>(vm: &Thread, name: &str)
+where
+    T: VmType + 'static,
+{
+    let name = ::gluon::base::symbol::Symbol::from(name);
+    let typ = <T as ::gluon::vm::api::VmType>::make_type(vm);
+    let alias = ::gluon::base::types::Alias::new(name.clone(), vec![], typ.clone());
+    vm.register_type_as(name, alias.clone(), ::std::any::TypeId::of::<T>())
+        .unwrap();
+}
+
 pub fn main() -> Result<(), failure::Error> {
     /// Another resource
-    #[derive(Debug, Default, Getable, Pushable, Clone, Component)]
+    #[derive(Debug, Default, Getable, Pushable, Clone, Component, VmType)]
     struct Bar;
 
     struct NormalSys;
@@ -740,26 +767,34 @@ pub fn main() -> Result<(), failure::Error> {
     let mut world = World::new();
     init_resources(&mut world.res);
 
-    let vm = new_vm();
+    let vm = VmBuilder::new()
+        .import_paths(Some(vec!["src".into()]))
+        .build();
 
-    vm.register_type::<GluonEntitiesPtr>("Entities", &[])?;
+    Compiler::new().run_expr::<()>(&vm, "", "let _ = import! gluon_component in ()")?;
+
+    vm.register_type::<GluonEntitiesPtr>("EntitiesRes", &[])?;
     vm.register_type::<GluonEntity>("Entity", &[])?;
     vm.register_type::<GluonLazyUpdatePtr>("LazyUpdate", &[])?;
     vm.register_type::<GluonResourceTablePtr>("ResourceTable", &[])?;
     vm.register_type::<GluonReflectionTablePtr>("ReflectionTable", &[])?;
 
-    register!(world,
-        "dt" => DeltaTime,
-        "entities" => EntitiesRes,
-        "lazy_update" => LazyUpdate,
-        "reflection_table" => ReflectionTable,
-        "resource_table" => ResourceTable
-    );
-    register_components!(world,
-        "pos" => Pos,
-        "vel" => Vel,
-        "bar" => Bar
-    );
+    register_struct_type::<DeltaTime>(&vm, "DeltaTime");
+    register_struct_type::<Bar>(&vm, "Bar");
+
+    register! {world, vm,
+        DeltaTime,
+        EntitiesRes,
+        LazyUpdate,
+        ReflectionTable,
+        ResourceTable
+    };
+
+    register_components! {world, vm,
+        Pos,
+        Vel,
+        Bar
+    };
 
     world.res.entry().or_insert_with(|| DeltaTime(0.1));
 
@@ -805,6 +840,7 @@ pub fn main() -> Result<(), failure::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gluon::new_vm;
 
     fn test_world() -> World {
         let mut world = World::new();
@@ -836,20 +872,21 @@ mod tests {
         scripts.dispatch(&mut world.res);
     }
 
-    #[derive(Debug, Default, Clone, PartialEq, Getable, Pushable, Component)]
+    #[derive(Debug, Default, Clone, PartialEq, Getable, Pushable, Component, VmType)]
     struct Test(i32);
 
     #[test]
     fn update_component() {
         let mut world = test_world();
-
-        register_components!{world,
-            "test" => Test
-        }
-
         let vm = new_vm();
 
-        let script = r#"let f: { test : Int } -> _ = \x -> { test =  x.test + 1 } in f"#;
+        register_struct_type::<Test>(&vm, "Test");
+
+        register_components! {world, vm,
+           Test
+        }
+
+        let script = r#"let f: { test : Test } -> _ = \x -> { test =  x.test + 1 } in f"#;
         let script0 = test_script_sys(&vm, &world.res, script).unwrap();
         let mut scripts = DispatcherBuilder::new()
             .with(script0, "script0", &[])
@@ -867,16 +904,17 @@ mod tests {
     #[test]
     fn multiple_systems() {
         let mut world = test_world();
-
-        register_components!{world,
-            "test" => Test
-        }
-
         let vm = new_vm();
 
-        let script = r#"let f: { test : Int } -> _ = \x -> { test =  x.test + 1 } in f"#;
+        register_struct_type::<Test>(&vm, "Test");
+
+        register_components! {world, vm,
+            Test
+        }
+
+        let script = r#"let f: { test : Test } -> _ = \x -> { test = x.test + 1 } in f"#;
         let script0 = test_script_sys(&vm, &world.res, script).unwrap();
-        let script = r#"let f: { test : Int } -> _ = \x -> { test =  x.test + 10 } in f"#;
+        let script = r#"let f: { test : Test } -> _ = \x -> { test = x.test + 10 } in f"#;
         let script1 = test_script_sys(&vm, &world.res, script).unwrap();
         let mut scripts = DispatcherBuilder::new()
             .with(script0, "script0", &[])
@@ -919,4 +957,31 @@ mod tests {
         let script = r#"let f: () -> Int = \x -> 1 in f"#;
         assert!(test_script_sys(&vm, &world.res, script).is_err());
     }
+
+    #[test]
+    fn tuple_argument() {
+        let mut world = test_world();
+        let vm = new_vm();
+
+        register_struct_type::<Test>(&vm, "Test");
+
+        register_components! {world, vm,
+            Test
+        }
+
+        let script = r#"
+            let f: (Test, Test) -> _ = \x -> { y = x._0 + 1 } in f
+        "#;
+        let script0 = test_script_sys(&vm, &world.res, script).unwrap();
+        let mut scripts = DispatcherBuilder::new()
+            .with(script0, "script0", &[])
+            .build();
+
+        let entity = world.create_entity().with(Test(1)).build();
+
+        scripts.dispatch(&mut world.res);
+
+        assert_eq!(world.read_storage::<Test>().get(entity), Some(&Test(2)));
+    }
+
 }

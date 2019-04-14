@@ -1,15 +1,15 @@
 [package]
-name = "ggez_game_template"
+name = "gluon-game"
 version = "0.1.0"
-authors = ["Simon Heath <icefoxen@gmail.com>"]
-license = "MIT OR Apache-2.0"
+authors = ["Markus Westerlind <marwes91@gmail.com>"]
+license = ""
 readme = "README.md"
 
 [dependencies]
 # Game stuff
 ggez = "0.4"
 ggez-goodies = "0.1"
-specs = "0.12"
+specs = "0.14"
 shred = "0.7"
 specs-derive = "0.1"
 warmy = "0.7"
@@ -24,5 +24,3 @@ gluon = { path = "../gluon" }
 gluon_vm = { path = "../gluon/vm" }
 gluon_codegen = { path = "../gluon/codegen" }
 
-[patch.crates-io]
-shred = { path = "../shred" }

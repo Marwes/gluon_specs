@@ -1,17 +1,7 @@
 let { negate } = import! std.num
 let entity = import! entity
 
-#[implicit]
-type AddComponent a = { component_name : String }
-    
-#[derive(Eq, Show)]
-type Pos = { x : Float, y : Float }
-
-let new_pos x y : Float -> Float -> Pos = { x, y }
-let pos_component : AddComponent Pos = { component_name = "pos" }
-
-#[derive(Eq, Show)]
-type Vel = { x : Float, y : Float }
+let { AddComponent, Pos, Vel, new_pos, ? } = import! gluon_component
 
 let new_vel x y : Float -> Float -> Pos = { x, y }
 
@@ -28,7 +18,7 @@ let num_Pos : Num Pos = {
 }
 
 
-let update r : { pos : Pos, dt: Float, entities : Entities, lazy_update: LazyUpdate, reflection_table: ReflectionTable } -> { pos : Pos } =
+let update r : { pos : Pos, dt: Float, entities : EntitiesRes, lazy_update: LazyUpdate, reflection_table: ReflectionTable } -> { pos : Pos } =
     let { pos, dt, entities, lazy_update, reflection_table } = r
     let e = entity.create entities
     add_component lazy_update reflection_table pos e
