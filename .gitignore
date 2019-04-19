@@ -11,3 +11,5 @@ Cargo.lock
 
 # Log file
 debug.log
+
+msvc/
