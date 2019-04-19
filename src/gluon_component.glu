@@ -6,10 +6,12 @@ type AddComponent a = { component_name : String }
 type Pos = { x : Float, y : Float }
 
 let new_pos x y : Float -> Float -> Pos = { x, y }
-let pos_component : AddComponent Pos = { component_name = "pos" }
 
 #[derive(Eq, Show)]
 type Vel = { x : Float, y : Float }
+
+let pos_component : AddComponent Pos = { component_name = "Pos" }
+let vel_component : AddComponent Vel = { component_name = "Vel" }
 
 {
     Pos,
@@ -17,6 +19,10 @@ type Vel = { x : Float, y : Float }
 
     AddComponent,
 
+    eq_Pos,
+    show_Pos,
+
     new_pos,
     pos_component,
+    vel_component,
 }

@@ -9,6 +9,7 @@ extern crate ggez;
 extern crate ggez_goodies;
 #[macro_use]
 extern crate log;
+extern crate itertools;
 extern crate shred;
 extern crate specs;
 #[macro_use]
@@ -75,11 +76,13 @@ fn setup_logger() -> Result<(), fern::InitError> {
         .level_for("gfx_device_gl", log::LevelFilter::Warn)
         .level(log::LevelFilter::Debug)
         .chain(std::io::stdout())
-        .chain(std::fs::OpenOptions::new()
-               .write(true)
-               .create(true)
-               .truncate(true)
-               .open("debug.log")?)
+        .chain(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open("debug.log")?,
+        )
         .apply()?;
     Ok(())
 }

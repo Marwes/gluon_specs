@@ -1,7 +1,7 @@
 let { negate } = import! std.num
 let entity = import! entity
 
-let { AddComponent, Pos, Vel, new_pos, ? } = import! gluon_component
+let { AddComponent, Pos, Vel, eq_Pos, new_pos, vel_component, ? } = import! gluon_component
 
 let new_vel x y : Float -> Float -> Pos = { x, y }
 
@@ -18,11 +18,11 @@ let num_Pos : Num Pos = {
 }
 
 
-let update r : { pos : Pos, dt: Float, entities : EntitiesRes, lazy_update: LazyUpdate, reflection_table: ReflectionTable } -> { pos : Pos } =
+let update r : { pos : Pos, dt: DeltaTime, entities : EntitiesRes, lazy_update: LazyUpdate, reflection_table: ReflectionTable } -> { pos : Pos } =
     let { pos, dt, entities, lazy_update, reflection_table } = r
     let e = entity.create entities
     add_component lazy_update reflection_table pos e
-    add_component ?{ component_name = "vel" } lazy_update reflection_table pos e
+    add_component lazy_update reflection_table pos e
     { pos = pos + { x = 0., y = 1.0 * dt } }
 
 update
