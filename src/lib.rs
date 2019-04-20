@@ -182,7 +182,7 @@ impl<'a> System<'a> for DynamicSystem {
                         }
                     }
                 })
-                .map(|res| unsafe { Reflection::open(res, data_res.fetch()) })
+                .map(|res| Reflection::open(res, data_res.fetch()))
                 .collect();
 
             let writes: Vec<_> = writes
@@ -195,7 +195,7 @@ impl<'a> System<'a> for DynamicSystem {
                         .get(res)
                         .expect("Not registered in meta table");
 
-                    unsafe { Reflection::open(res, data_res.fetch()) }
+                    Reflection::open(res, data_res.fetch())
                 })
                 .collect();
             mask = reflection_bitset(reads.iter().chain(writes.iter()).map(|b| &**b));
@@ -226,7 +226,7 @@ impl<'a> System<'a> for DynamicSystem {
                     .get_mut(res)
                     .expect("Not registered in meta table");
 
-                unsafe { ReflectionMut::open_mut(res, data_res.fetch()) }
+                ReflectionMut::open_mut(res, data_res.fetch())
             })
             .collect();
 
@@ -248,11 +248,11 @@ impl<'a> System<'a> for DynamicSystem {
 }
 
 pub trait Reflection {
-    unsafe fn open<'a>(&'a self, entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a>;
+    fn open<'a>(&'a self, entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a>;
 }
 
 pub trait ReflectionMut: Reflection {
-    unsafe fn open_mut<'a>(
+    fn open_mut<'a>(
         &'a mut self,
         entities: Fetch<'a, EntitiesRes>,
     ) -> Box<ReflectionStorageMut + 'a>;
@@ -269,7 +269,7 @@ macro_rules! impl_reflection {
     ($($ty: ty),*) => {
         $(
             impl Reflection for $ty {
-                unsafe fn open<'a>(&'a self, _entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a > {
+                fn open<'a>(&'a self, _entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a > {
                     Box::new(self)
                 }
             }
@@ -290,7 +290,7 @@ macro_rules! impl_reflection {
 impl_reflection! { ResourceTable, ReflectionTable, GluonEntities, GluonLazyUpdate }
 
 impl Reflection for EntitiesRes {
-    unsafe fn open<'a>(&'a self, _entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a> {
+    fn open<'a>(&'a self, _entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a> {
         Box::new(self)
     }
 }
@@ -305,7 +305,7 @@ impl<'a> ReflectionStorage for &'a EntitiesRes {
 }
 
 impl Reflection for LazyUpdate {
-    unsafe fn open<'a>(&'a self, _entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a> {
+    fn open<'a>(&'a self, _entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a> {
         Box::new(self)
     }
 }
@@ -323,7 +323,7 @@ impl<T> Reflection for MaskedStorage<T>
 where
     T: Component + GluonMarshalTo + Send + Sync,
 {
-    unsafe fn open<'a>(&'a self, entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a> {
+    fn open<'a>(&'a self, entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a> {
         Box::new(Storage::new(entities, self))
     }
 }
@@ -332,7 +332,7 @@ impl<T> ReflectionMut for MaskedStorage<T>
 where
     T: Component + GluonMarshalFrom + Send + Sync,
 {
-    unsafe fn open_mut<'a>(
+    fn open_mut<'a>(
         &'a mut self,
         entities: Fetch<'a, EntitiesRes>,
     ) -> Box<ReflectionStorageMut + 'a> {
