@@ -553,7 +553,7 @@ impl ReflectionTable {
 /// Maps resource names to resource ids.
 #[derive(Userdata, Debug, Default, VmType)]
 #[gluon(vm_type = "ResourceTable")]
-pub struct ResourceTable {
+struct ResourceTable {
     map: HashMap<ArcType, ResourceId>,
 }
 
@@ -723,24 +723,19 @@ pub fn create_script_system(
     Ok(sys)
 }
 
-#[macro_export]
-macro_rules! register_components {
-    ($world: expr, $thread: expr, $($t: ty),+) => {{
-        let ref mut world = $world;
-        let ref thread = $thread;
-        {
-            let mut reflection_table = world.res.fetch_mut::<$crate::ReflectionTable>();
-            let mut resource_table = world.res.fetch_mut::<$crate::ResourceTable>();
-            $(
-                reflection_table.register_mut(stringify!($t), &specs::storage::MaskedStorage::<$t>::default());
-                let typ = <$t as gluon::vm::api::VmType>::make_type(thread);
-                resource_table.register_component::<$t>(typ);
-            )+
-        }
-        $(
-            world.register::<$t>();
-        )+
-    }}
+pub fn register_component<T>(world: &mut specs::World, thread: &gluon::Thread, name: &str)
+where
+    T: Component + VmType + MarshalFrom + Send + Sync,
+    T::Storage: Default,
+{
+    {
+        let mut reflection_table = world.res.fetch_mut::<ReflectionTable>();
+        let mut resource_table = world.res.fetch_mut::<ResourceTable>();
+        reflection_table.register_mut(name, &specs::storage::MaskedStorage::<T>::default());
+        let typ = <T as gluon::vm::api::VmType>::make_type(thread);
+        resource_table.register_component::<T>(typ);
+    }
+    world.register::<T>();
 }
 
 macro_rules! register {
@@ -848,9 +843,7 @@ mod tests {
         let vm = new_vm();
         let mut world = test_world(&vm);
 
-        register_components! {world, vm,
-           Test
-        }
+        register_component::<Test>(&mut world, &vm, "Test");
 
         let script = r#"let f: { test : Test } -> _ = \x -> { test =  x.test + 1 } in f"#;
         let script0 = test_script_sys(&vm, &world.res, script).unwrap();
@@ -872,9 +865,7 @@ mod tests {
         let vm = new_vm();
         let mut world = test_world(&vm);
 
-        register_components! {world, vm,
-            Test
-        }
+        register_component::<Test>(&mut world, &vm, "Test");
 
         let script = r#"let f: { test : Test } -> _ = \x -> { test = x.test + 1 } in f"#;
         let script0 = test_script_sys(&vm, &world.res, script).unwrap();
@@ -924,9 +915,7 @@ mod tests {
         let vm = new_vm();
         let mut world = test_world(&vm);
 
-        register_components! {world, vm,
-            Test
-        }
+        register_component::<Test>(&mut world, &vm, "Test");
 
         let script = r#"
             let f: (Test, Test) -> _ = \x -> { y = x._0 + 1 } in f
