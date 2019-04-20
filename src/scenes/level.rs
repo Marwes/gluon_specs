@@ -1,8 +1,12 @@
+use std::fs;
+
 use ggez;
 use ggez::graphics;
 use ggez_goodies::scene;
 use specs::{self, Join};
 use warmy;
+
+use gluon_system;
 
 use components as c;
 use input;
@@ -18,24 +22,52 @@ pub struct LevelScene {
 }
 
 impl LevelScene {
-    pub fn new(ctx: &mut ggez::Context, world: &mut World) -> Self {
+    pub fn new(ctx: &mut ggez::Context, world: &mut World) -> Result<Self, failure::Error> {
         let done = false;
         let kiwi = world
             .assets
             .get::<_, resources::Image>(&warmy::FSKey::new("/images/kiwi.png"), ctx)
             .unwrap();
-        let dispatcher = Self::register_systems();
-        LevelScene {
+
+        let thread = gluon::VmBuilder::new()
+            .import_paths(Some(vec!["src".into()]))
+            .build();
+
+        gluon_system::init_resources(&mut world.specs_world.res, &thread);
+
+        gluon::Compiler::new().run_expr::<()>(
+            &thread,
+            "",
+            "let _ = import! gluon_component in ()",
+        )?;
+
+        use components::*;
+        register_components! {world.specs_world, thread,
+            Position,
+            Motion
+        };
+
+        let dispatcher = Self::register_systems(&thread, world)?;
+        Ok(LevelScene {
             done,
             kiwi,
             dispatcher,
-        }
+        })
     }
 
-    fn register_systems() -> specs::Dispatcher<'static, 'static> {
-        specs::DispatcherBuilder::new()
+    fn register_systems(
+        thread: &gluon::Thread,
+        world: &World,
+    ) -> Result<specs::Dispatcher<'static, 'static>, failure::Error> {
+        let script = fs::read_to_string("src/gluon_system.glu")?;
+        let (function, typ) = gluon::Compiler::new().run_expr(thread, "update", &script)?;
+        let gluon_system =
+            gluon_system::create_script_system(thread, &world.specs_world.res, function, &typ)?;
+
+        Ok(specs::DispatcherBuilder::new()
             .with(MovementSystem, "sys_movement", &[])
-            .build()
+            .with(gluon_system, "script", &[])
+            .build())
     }
 }
 

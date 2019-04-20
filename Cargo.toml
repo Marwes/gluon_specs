@@ -17,6 +17,7 @@ warmy = "0.7"
 
 # Utility stuff
 log = "0.4"
+env_logger = "0.6"
 fern = {version = "0.5", features = ["colored"] }
 chrono = "0.4"
 failure = "0.1"

@@ -3,26 +3,28 @@
 type AddComponent a = { component_name : String }
     
 #[derive(Eq, Show)]
-type Pos = { x : Float, y : Float }
+type Vec2 = { x : Float, y : Float }
 
-let new_pos x y : Float -> Float -> Pos = { x, y }
+type Position = Vec2
+
+let new_pos x y : Float -> Float -> Position = { x, y }
 
 #[derive(Eq, Show)]
-type Vel = { x : Float, y : Float }
+type Motion = { velocity : Vec2, acceleration : Vec2 }
 
-let pos_component : AddComponent Pos = { component_name = "Pos" }
-let vel_component : AddComponent Vel = { component_name = "Vel" }
+let pos_component : AddComponent Position = { component_name = "Position" }
+let motion_component : AddComponent Motion = { component_name = "Motion" }
 
 {
-    Pos,
-    Vel,
+    Position,
+    Motion,
 
     AddComponent,
 
-    eq_Pos,
-    show_Pos,
+    eq_Vec2,
+    show_Vec2,
 
     new_pos,
     pos_component,
-    vel_component,
+    motion_component,
 }
