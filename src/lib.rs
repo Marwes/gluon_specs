@@ -42,11 +42,11 @@ type GluonAny = OpaqueValue<RootedThread, Hole>;
 
 /// Some trait that all of your dynamic resources should implement.
 /// This trait should be able to register / transfer it to the scripting framework.
-pub trait GluonMarshalTo {
+pub trait MarshalTo {
     fn to_gluon<'a>(&'a self, thread: &Thread, proxies: &mut Vec<Box<Dropbox + 'a>>);
 }
 
-pub trait GluonMarshalFrom: GluonMarshalTo {
+pub trait MarshalFrom: MarshalTo {
     fn from_gluon(&mut self, thread: &Thread, variants: Variants);
 
     fn new_value(thread: &Thread, variants: Variants) -> Self
@@ -54,7 +54,7 @@ pub trait GluonMarshalFrom: GluonMarshalTo {
         Self: Sized;
 }
 
-impl<T> GluonMarshalTo for T
+impl<T> MarshalTo for T
 where
     T: Userdata + VmType,
     T: ::std::fmt::Debug,
@@ -69,7 +69,7 @@ where
 #[macro_export]
 macro_rules! impl_clone_marshal {
     ($ty: ty) => {
-        impl $crate::GluonMarshalTo for $ty {
+        impl $crate::MarshalTo for $ty {
             fn to_gluon<'a>(
                 &'a self,
                 thread: &gluon::Thread,
@@ -80,7 +80,7 @@ macro_rules! impl_clone_marshal {
             }
         }
 
-        impl $crate::GluonMarshalFrom for $ty {
+        impl $crate::MarshalFrom for $ty {
             fn from_gluon(&mut self, thread: &gluon::Thread, variants: gluon::vm::Variants) {
                 *self = Self::new_value(thread, variants);
             }
@@ -278,7 +278,7 @@ macro_rules! impl_reflection {
                 fn mask(&self) -> Option<&BitSet> {
                     None
                 }
-                unsafe fn get(&self, _index: u32) -> &GluonMarshalTo {
+                unsafe fn get(&self, _index: u32) -> &MarshalTo {
                     *self
                 }
             }
@@ -299,7 +299,7 @@ impl<'a> ReflectionStorage for &'a EntitiesRes {
     fn mask(&self) -> Option<&BitSet> {
         None
     }
-    unsafe fn get(&self, _index: u32) -> &GluonMarshalTo {
+    unsafe fn get(&self, _index: u32) -> &MarshalTo {
         mem::transmute::<&EntitiesRes, &GluonEntities>(self)
     }
 }
@@ -314,14 +314,14 @@ impl<'a> ReflectionStorage for &'a LazyUpdate {
     fn mask(&self) -> Option<&BitSet> {
         None
     }
-    unsafe fn get(&self, _index: u32) -> &GluonMarshalTo {
+    unsafe fn get(&self, _index: u32) -> &MarshalTo {
         mem::transmute::<&LazyUpdate, &GluonLazyUpdate>(self)
     }
 }
 
 impl<T> Reflection for MaskedStorage<T>
 where
-    T: Component + GluonMarshalTo + Send + Sync,
+    T: Component + MarshalTo + Send + Sync,
 {
     fn open<'a>(&'a self, entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a> {
         Box::new(Storage::new(entities, self))
@@ -330,7 +330,7 @@ where
 
 impl<T> ReflectionMut for MaskedStorage<T>
 where
-    T: Component + GluonMarshalFrom + Send + Sync,
+    T: Component + MarshalFrom + Send + Sync,
 {
     fn open_mut<'a>(
         &'a mut self,
@@ -349,31 +349,31 @@ where
 
 pub trait ReflectionStorage {
     fn mask(&self) -> Option<&BitSet>;
-    unsafe fn get(&self, index: u32) -> &GluonMarshalTo;
+    unsafe fn get(&self, index: u32) -> &MarshalTo;
 }
 
 impl<'a, T, D> ReflectionStorage for Storage<'a, T, D>
 where
-    T: Component + GluonMarshalTo + Send + Sync,
+    T: Component + MarshalTo + Send + Sync,
     D: std::ops::Deref<Target = MaskedStorage<T>>,
 {
     fn mask(&self) -> Option<&BitSet> {
         Some(Storage::mask(self))
     }
-    unsafe fn get(&self, index: u32) -> &GluonMarshalTo {
+    unsafe fn get(&self, index: u32) -> &MarshalTo {
         self.unprotected_storage().get(index)
     }
 }
 
 pub trait ReflectionStorageMut: ReflectionStorage {
-    unsafe fn get_mut(&mut self, index: u32) -> &mut GluonMarshalFrom;
+    unsafe fn get_mut(&mut self, index: u32) -> &mut MarshalFrom;
 }
 
 impl<'a, T> ReflectionStorageMut for Storage<'a, T, &'a mut MaskedStorage<T>>
 where
-    T: Component + GluonMarshalFrom + Send + Sync,
+    T: Component + MarshalFrom + Send + Sync,
 {
-    unsafe fn get_mut(&mut self, index: u32) -> &mut GluonMarshalFrom {
+    unsafe fn get_mut(&mut self, index: u32) -> &mut MarshalFrom {
         self.unprotected_storage_mut().get_mut(index)
     }
 }
