@@ -151,14 +151,14 @@ impl<'a> System<'a> for DynamicSystem {
 
     fn run(&mut self, data: Self::SystemData) {
         let meta = data.meta_table;
-        let entities = data.entities;
+        let data_res = data.res;
         let mut writes = data.writes;
 
         let mask;
 
         let mut outputs = Vec::new();
         {
-            let reads: Vec<&Reflection> = data
+            let reads: Vec<_> = data
                 .reads
                 .iter()
                 .map(|resource| {
@@ -182,9 +182,12 @@ impl<'a> System<'a> for DynamicSystem {
                         }
                     }
                 })
+                .map(|res| unsafe { Reflection::open(res, data_res.fetch()) })
                 .collect();
-            mask = reflection_bitset(
-                reads.iter().cloned().chain(writes.iter().map(|resource| {
+
+            let writes: Vec<_> = writes
+                .iter()
+                .map(|resource| {
                     let res = Box::as_ref(resource);
 
                     let res: &Reflection = meta
@@ -192,16 +195,15 @@ impl<'a> System<'a> for DynamicSystem {
                         .get(res)
                         .expect("Not registered in meta table");
 
-                    res
-                })),
-                entities.clone(),
-            );
+                    unsafe { Reflection::open(res, data_res.fetch()) }
+                })
+                .collect();
+            mask = reflection_bitset(reads.iter().chain(writes.iter()).map(|b| &**b));
 
             let thread = self.script.vm().root_thread();
 
             for input in (GluonJoin {
                 reads: &reads,
-                entities: entities.clone(),
                 thread: &thread,
                 fields: &data.read_fields,
                 mask: &mask,
@@ -214,7 +216,7 @@ impl<'a> System<'a> for DynamicSystem {
             }
         }
 
-        let mut writes: Vec<&mut ReflectionMut> = writes
+        let mut writes: Vec<_> = writes
             .iter_mut()
             .map(|resource| {
                 let res = Box::as_mut(resource);
@@ -224,14 +226,13 @@ impl<'a> System<'a> for DynamicSystem {
                     .get_mut(res)
                     .expect("Not registered in meta table");
 
-                res
+                unsafe { ReflectionMut::open_mut(res, data_res.fetch()) }
             })
             .collect();
 
         let writes = GluonJoinMut {
             writes: &mut writes,
             outputs,
-            entities: entities.clone(),
             mask: &mask,
         };
         for () in writes.join() {}
@@ -247,13 +248,14 @@ impl<'a> System<'a> for DynamicSystem {
 }
 
 pub trait Reflection {
-    unsafe fn open(&self, entities: Fetch<EntitiesRes>) -> Option<&BitSet>;
-    unsafe fn get(&self, entities: Fetch<EntitiesRes>, index: u32) -> &GluonMarshalTo;
+    unsafe fn open<'a>(&'a self, entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a>;
 }
 
 pub trait ReflectionMut: Reflection {
-    unsafe fn get_mut(&mut self, entities: Fetch<EntitiesRes>, index: u32)
-        -> &mut GluonMarshalFrom;
+    unsafe fn open_mut<'a>(
+        &'a mut self,
+        entities: Fetch<'a, EntitiesRes>,
+    ) -> Box<ReflectionStorageMut + 'a>;
     fn add_component(lazy: &LazyUpdate, thread: &Thread, entity: Entity, value: Variants)
     where
         Self: Sized,
@@ -263,26 +265,24 @@ pub trait ReflectionMut: Reflection {
     }
 }
 
-unsafe fn forget_lifetime<'a, 'b, T: ?Sized>(x: &'a T) -> &'b T {
-    ::std::mem::transmute(x)
-}
-
-unsafe fn forget_lifetime_mut<'a, 'b, T: ?Sized>(x: &'a mut T) -> &'b mut T {
-    ::std::mem::transmute(x)
-}
-
 macro_rules! impl_reflection {
     ($($ty: ty),*) => {
         $(
             impl Reflection for $ty {
-                unsafe fn open(&self, _entities: Fetch<EntitiesRes>) -> Option<&BitSet> {
-                    None
-                }
-
-                unsafe fn get(&self, _entities: Fetch<EntitiesRes>, _index: u32) -> &GluonMarshalTo {
-                    self
+                unsafe fn open<'a>(&'a self, _entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a > {
+                    Box::new(self)
                 }
             }
+
+            impl<'a> ReflectionStorage for &'a $ty {
+                fn mask(&self) -> Option<&BitSet> {
+                    None
+                }
+                unsafe fn get(&self, _index: u32) -> &GluonMarshalTo {
+                    *self
+                }
+            }
+
         )*
     }
 }
@@ -290,22 +290,32 @@ macro_rules! impl_reflection {
 impl_reflection! { ResourceTable, ReflectionTable, GluonEntities, GluonLazyUpdate }
 
 impl Reflection for EntitiesRes {
-    unsafe fn open(&self, _entities: Fetch<EntitiesRes>) -> Option<&BitSet> {
+    unsafe fn open<'a>(&'a self, _entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a> {
+        Box::new(self)
+    }
+}
+
+impl<'a> ReflectionStorage for &'a EntitiesRes {
+    fn mask(&self) -> Option<&BitSet> {
         None
     }
-
-    unsafe fn get(&self, _entities: Fetch<EntitiesRes>, _index: u32) -> &GluonMarshalTo {
-        mem::transmute::<_, &GluonEntities>(self)
+    unsafe fn get(&self, _index: u32) -> &GluonMarshalTo {
+        mem::transmute::<&EntitiesRes, &GluonEntities>(self)
     }
 }
 
 impl Reflection for LazyUpdate {
-    unsafe fn open(&self, _entities: Fetch<EntitiesRes>) -> Option<&BitSet> {
+    unsafe fn open<'a>(&'a self, _entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a> {
+        Box::new(self)
+    }
+}
+
+impl<'a> ReflectionStorage for &'a LazyUpdate {
+    fn mask(&self) -> Option<&BitSet> {
         None
     }
-
-    unsafe fn get(&self, _entities: Fetch<EntitiesRes>, _index: u32) -> &GluonMarshalTo {
-        mem::transmute::<_, &GluonLazyUpdate>(self)
+    unsafe fn get(&self, _index: u32) -> &GluonMarshalTo {
+        mem::transmute::<&LazyUpdate, &GluonLazyUpdate>(self)
     }
 }
 
@@ -313,17 +323,8 @@ impl<T> Reflection for MaskedStorage<T>
 where
     T: Component + GluonMarshalTo + Send + Sync,
 {
-    unsafe fn open(&self, entities: Fetch<EntitiesRes>) -> Option<&BitSet> {
-        // mask is actually bound to `self`
-        Some(forget_lifetime(Storage::new(entities, self).mask()))
-    }
-
-    unsafe fn get(&self, entities: Fetch<EntitiesRes>, index: u32) -> &GluonMarshalTo {
-        forget_lifetime(
-            Storage::new(entities, self)
-                .unprotected_storage()
-                .get(index),
-        )
+    unsafe fn open<'a>(&'a self, entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a> {
+        Box::new(Storage::new(entities, self))
     }
 }
 
@@ -331,16 +332,11 @@ impl<T> ReflectionMut for MaskedStorage<T>
 where
     T: Component + GluonMarshalFrom + Send + Sync,
 {
-    unsafe fn get_mut(
-        &mut self,
-        entities: Fetch<EntitiesRes>,
-        index: u32,
-    ) -> &mut GluonMarshalFrom {
-        forget_lifetime_mut(
-            Storage::new(entities, self)
-                .unprotected_storage_mut()
-                .get_mut(index),
-        )
+    unsafe fn open_mut<'a>(
+        &'a mut self,
+        entities: Fetch<'a, EntitiesRes>,
+    ) -> Box<ReflectionStorageMut + 'a> {
+        Box::new(Storage::new(entities, self))
     }
 
     fn add_component(lazy: &LazyUpdate, thread: &Thread, entity: Entity, value: Variants)
@@ -351,15 +347,45 @@ where
     }
 }
 
+pub trait ReflectionStorage {
+    fn mask(&self) -> Option<&BitSet>;
+    unsafe fn get(&self, index: u32) -> &GluonMarshalTo;
+}
+
+impl<'a, T, D> ReflectionStorage for Storage<'a, T, D>
+where
+    T: Component + GluonMarshalTo + Send + Sync,
+    D: std::ops::Deref<Target = MaskedStorage<T>>,
+{
+    fn mask(&self) -> Option<&BitSet> {
+        Some(Storage::mask(self))
+    }
+    unsafe fn get(&self, index: u32) -> &GluonMarshalTo {
+        self.unprotected_storage().get(index)
+    }
+}
+
+pub trait ReflectionStorageMut: ReflectionStorage {
+    unsafe fn get_mut(&mut self, index: u32) -> &mut GluonMarshalFrom;
+}
+
+impl<'a, T> ReflectionStorageMut for Storage<'a, T, &'a mut MaskedStorage<T>>
+where
+    T: Component + GluonMarshalFrom + Send + Sync,
+{
+    unsafe fn get_mut(&mut self, index: u32) -> &mut GluonMarshalFrom {
+        self.unprotected_storage_mut().get_mut(index)
+    }
+}
+
 // Dummy trait to box something that just needs to be dropped later
 pub trait Dropbox {}
 
 impl<T> Dropbox for T {}
 
 struct GluonJoin<'a> {
-    reads: &'a [&'a Reflection],
+    reads: &'a [Box<ReflectionStorage + 'a>],
     proxies: Vec<Box<Dropbox + 'a>>,
-    entities: Fetch<'a, EntitiesRes>,
     thread: &'a Thread,
     fields: &'a [InternedStr],
     mask: &'a BitSet,
@@ -376,7 +402,7 @@ impl<'a> Join for GluonJoin<'a> {
     unsafe fn get(value: &mut Self::Value, index: u32) -> Self::Type {
         let thread = value.thread;
         for reflection in value.reads {
-            let read = Reflection::get(*reflection, value.entities.clone(), index);
+            let read = ReflectionStorage::get(&**reflection, index);
             read.to_gluon(thread, &mut value.proxies);
         }
 
@@ -390,34 +416,28 @@ impl<'a> Join for GluonJoin<'a> {
     }
 }
 
-fn reflection_bitset<'a>(
-    iter: impl IntoIterator<Item = &'a Reflection>,
-    entities: Fetch<EntitiesRes>,
-) -> BitSet {
-    unsafe {
-        iter.into_iter()
-            .flat_map(|reflection| Reflection::open(reflection, entities.clone()))
-            .fold(None, |acc, set| {
-                Some(match acc {
-                    Some(mut acc) => {
-                        acc &= set;
-                        acc
-                    }
-                    None => set.clone(),
-                })
+fn reflection_bitset<'a>(iter: impl IntoIterator<Item = &'a ReflectionStorage>) -> BitSet {
+    iter.into_iter()
+        .flat_map(|reflection| reflection.mask())
+        .fold(None, |acc, set| {
+            Some(match acc {
+                Some(mut acc) => {
+                    acc &= set;
+                    acc
+                }
+                None => set.clone(),
             })
-            .unwrap_or_default()
-    }
+        })
+        .unwrap_or_default()
 }
 
-struct GluonJoinMut<'a, 'e> {
-    writes: &'a mut [&'a mut ReflectionMut],
+struct GluonJoinMut<'a, 'e: 'a> {
+    writes: &'a mut [Box<ReflectionStorageMut + 'e>],
     outputs: Vec<GluonAny>,
-    entities: Fetch<'e, EntitiesRes>,
     mask: &'a BitSet,
 }
 
-impl<'a, 'e> Join for GluonJoinMut<'a, 'e> {
+impl<'a, 'e: 'a> Join for GluonJoinMut<'a, 'e> {
     type Type = ();
     type Value = Self;
     type Mask = &'a BitSet;
@@ -427,10 +447,7 @@ impl<'a, 'e> Join for GluonJoinMut<'a, 'e> {
 
     unsafe fn get(value: &mut Self::Value, index: u32) -> Self::Type {
         let GluonJoinMut {
-            writes,
-            outputs,
-            entities,
-            ..
+            writes, outputs, ..
         } = value;
 
         // FIXME Don't rely on the indexes being sequential
@@ -440,9 +457,7 @@ impl<'a, 'e> Join for GluonJoinMut<'a, 'e> {
         match value.get_variant().as_ref() {
             ValueRef::Data(data) => {
                 for (variant, write) in data.iter().zip(&mut **writes) {
-                    write
-                        .get_mut(entities.clone(), index)
-                        .from_gluon(thread, variant);
+                    write.get_mut(index).from_gluon(thread, variant);
                 }
             }
             _ => panic!("Expected Data when writing the result of a script system"),
@@ -573,7 +588,9 @@ pub struct ScriptSystemData<'a> {
     read_fields: Vec<InternedStr>,
     reads: Vec<ReadType<'a>>,
     writes: Vec<RefMut<'a, Box<Resource + 'static>>>,
+    #[allow(unused)] // FIXME Clone this when running the system instead of re-fetching
     entities: Fetch<'a, EntitiesRes>,
+    res: &'a shred::World,
 }
 
 impl<'a> DynamicSystemData<'a> for ScriptSystemData<'a> {
@@ -631,6 +648,7 @@ impl<'a> DynamicSystemData<'a> for ScriptSystemData<'a> {
             reads,
             entities,
             writes,
+            res,
         }
     }
 }
