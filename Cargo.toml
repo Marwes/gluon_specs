@@ -10,7 +10,7 @@ edition = "2018"
 # Game stuff
 itertools = "0.8"
 specs = "0.14"
-shred = "0.8"
+shred = "0.7"
 specs-derive = "0.1"
 
 # Utility stuff
@@ -22,6 +22,3 @@ gluon = { path = "../gluon" }
 gluon_vm = { path = "../gluon/vm" }
 gluon_codegen = { path = "../gluon/codegen" }
 
-[patch.crates-io]
-shred = { path = "../shred" }
-specs = { path = "../specs" }

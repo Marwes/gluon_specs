@@ -242,7 +242,7 @@ impl<'a> System<'a> for DynamicSystem {
         AccessorCow::Ref(&self.dependencies)
     }
 
-    fn setup(&mut self, _res: &mut shred::World) {
+    fn setup(&mut self, _res: &mut shred::Resources) {
         // this could call a setup function of the script
     }
 }
@@ -488,7 +488,7 @@ fn add_component(
 }
 
 // necessary for `MetaTable`
-unsafe impl<T> CastFrom<T> for Reflection
+impl<T> CastFrom<T> for Reflection
 where
     T: Reflection + 'static,
 {
@@ -501,7 +501,7 @@ where
     }
 }
 
-unsafe impl<T> CastFrom<T> for ReflectionMut
+impl<T> CastFrom<T> for ReflectionMut
 where
     T: ReflectionMut + 'static,
 {
@@ -590,20 +590,20 @@ pub struct ScriptSystemData<'a> {
     writes: Vec<RefMut<'a, Box<Resource + 'static>>>,
     #[allow(unused)] // FIXME Clone this when running the system instead of re-fetching
     entities: Fetch<'a, EntitiesRes>,
-    res: &'a shred::World,
+    res: &'a shred::Resources,
 }
 
 impl<'a> DynamicSystemData<'a> for ScriptSystemData<'a> {
     type Accessor = Dependencies;
 
-    fn setup(_accessor: &Dependencies, _res: &mut shred::World) {}
+    fn setup(_accessor: &Dependencies, _res: &mut shred::Resources) {}
 
-    fn fetch(access: &Dependencies, res: &'a shred::World) -> Self {
+    fn fetch(access: &Dependencies, res: &'a shred::Resources) -> Self {
         let writes = access
             .writes
             .iter()
             .map(|id| {
-                res.try_fetch_internal(id.clone())
+                res.try_fetch_internal(id.0.clone())
                     .unwrap_or_else(|| {
                         panic!("bug: the requested resource does not exist: {:?}", id)
                     })
@@ -618,7 +618,7 @@ impl<'a> DynamicSystemData<'a> for ScriptSystemData<'a> {
                     ReadType::Write(i)
                 } else {
                     ReadType::Read(
-                        res.try_fetch_internal(id.clone())
+                        res.try_fetch_internal(id.0.clone())
                             .unwrap_or_else(|| {
                                 panic!("bug: the requested resource does not exist: {:?}", id)
                             })
@@ -655,7 +655,7 @@ impl<'a> DynamicSystemData<'a> for ScriptSystemData<'a> {
 
 pub fn create_script_system(
     thread: &Thread,
-    res: &shred::World,
+    res: &shred::Resources,
     function: OwnedFunction<fn(GluonAny) -> GluonAny>,
     update_type: &ArcType,
 ) -> Result<DynamicSystem, failure::Error> {
@@ -748,7 +748,7 @@ macro_rules! register {
     }}
 }
 
-pub fn init_resources(world: &mut shred::World, thread: &Thread) {
+pub fn init_resources(world: &mut shred::Resources, thread: &Thread) {
     world.entry().or_insert_with(|| ReflectionTable::default());
     world.entry().or_insert_with(|| ResourceTable::new());
 
@@ -806,7 +806,7 @@ mod tests {
 
     fn test_script_sys(
         vm: &Thread,
-        res: &shred::World,
+        res: &shred::Resources,
         script: &str,
     ) -> Result<DynamicSystem, failure::Error> {
         let (function, typ) = gluon::Compiler::new().run_expr(&vm, "update", script)?;
