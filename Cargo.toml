@@ -1,25 +1,21 @@
 [package]
-name = "gluon-game"
+name = "gluon_specs"
 version = "0.1.0"
 authors = ["Markus Westerlind <marwes91@gmail.com>"]
-license = ""
+license = "MIT"
 readme = "README.md"
+edition = "2018"
 
 [dependencies]
 # Game stuff
-ggez = "0.4"
-ggez-goodies = "0.1"
 itertools = "0.8"
 specs = "0.14"
 shred = "0.8"
 specs-derive = "0.1"
-warmy = "0.7"
 
 # Utility stuff
 log = "0.4"
 env_logger = "0.6"
-fern = {version = "0.5", features = ["colored"] }
-chrono = "0.4"
 failure = "0.1"
 
 gluon = { path = "../gluon" }

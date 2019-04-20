@@ -11,9 +11,10 @@ use specs::{
     BitSet, Component, Entity, Join, LazyUpdate,
 };
 
-use shred::cell::{Ref, RefMut};
 use shred::{
-    self, Accessor, AccessorCow, CastFrom, DynamicSystemData, Fetch, MetaTable, Read, Resource,
+    self,
+    cell::{Ref, RefMut},
+    Accessor, AccessorCow, CastFrom, DynamicSystemData, Fetch, MetaTable, Read, Resource,
     ResourceId, System, SystemData,
 };
 
@@ -26,11 +27,16 @@ use gluon::{
             RuntimeResult, Userdata, ValueRef, VmType, WithVM,
         },
         internal::InternedStr,
+        primitive, record,
         thread::ThreadInternal,
         ExternModule, Variants,
     },
     RootedThread, Thread,
 };
+
+use gluon_codegen::{Userdata, VmType};
+
+pub use gluon;
 
 type GluonAny = OpaqueValue<RootedThread, Hole>;
 
@@ -60,25 +66,27 @@ where
     }
 }
 
+#[macro_export]
 macro_rules! impl_clone_marshal {
     ($ty: ty) => {
-        impl $crate::gluon_system::GluonMarshalTo for $ty {
+        impl $crate::GluonMarshalTo for $ty {
             fn to_gluon<'a>(
                 &'a self,
                 thread: &gluon::Thread,
-                _proxies: &mut Vec<Box<$crate::gluon_system::Dropbox + 'a>>,
+                _proxies: &mut Vec<Box<$crate::Dropbox + 'a>>,
             ) {
-                Pushable::push(self.clone(), &mut thread.current_context()).unwrap()
+                $crate::gluon::vm::api::Pushable::push(self.clone(), &mut thread.current_context())
+                    .unwrap()
             }
         }
 
-        impl $crate::gluon_system::GluonMarshalFrom for $ty {
+        impl $crate::GluonMarshalFrom for $ty {
             fn from_gluon(&mut self, thread: &gluon::Thread, variants: gluon::vm::Variants) {
                 *self = Self::new_value(thread, variants);
             }
 
             fn new_value(thread: &gluon::Thread, variants: gluon::vm::Variants) -> Self {
-                Getable::from_value(thread, variants)
+                $crate::gluon::vm::api::Getable::from_value(thread, variants)
             }
         }
     };
@@ -703,8 +711,8 @@ macro_rules! register_components {
         let ref mut world = $world;
         let ref thread = $thread;
         {
-            let mut reflection_table = world.res.fetch_mut::<$crate::gluon_system::ReflectionTable>();
-            let mut resource_table = world.res.fetch_mut::<$crate::gluon_system::ResourceTable>();
+            let mut reflection_table = world.res.fetch_mut::<$crate::ReflectionTable>();
+            let mut resource_table = world.res.fetch_mut::<$crate::ResourceTable>();
             $(
                 reflection_table.register_mut(stringify!($t), &specs::storage::MaskedStorage::<$t>::default());
                 let typ = <$t as gluon::vm::api::VmType>::make_type(thread);
@@ -722,8 +730,8 @@ macro_rules! register {
         let ref mut world = $world;
         let ref thread = $thread;
         {
-            let mut reflection_table = world.fetch_mut::<$crate::gluon_system::ReflectionTable>();
-            let mut resource_table = world.fetch_mut::<$crate::gluon_system::ResourceTable>();
+            let mut reflection_table = world.fetch_mut::<$crate::ReflectionTable>();
+            let mut resource_table = world.fetch_mut::<$crate::ResourceTable>();
             $(
                 reflection_table.register(stringify!($t), &<$t>::default());
                 let typ = thread.get_type::<$t>().unwrap_or_else(|| panic!("`{}` is missing", stringify!($t)));
@@ -776,6 +784,10 @@ mod tests {
     use super::*;
 
     use specs::{Builder, DispatcherBuilder};
+
+    use specs_derive::Component;
+
+    use gluon_codegen::{Getable, Pushable};
 
     use gluon::new_vm;
 

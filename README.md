@@ -1,9 +1,3 @@
-# game-template
+# gluon_specs
 
-A (not necessarily complete) game template combining [ggez](https://github.com/ggez/ggez/) with another of other useful Rust
-gamedev tools:
-
- * log + fern (logging)
- * failure (error reporting)
- * specs (ECS)
- * warmy (resource handling)
+[specs](https://github.com/slide-rs/specs) integration for the [gluon](https://github.com/gluon-lang/gluon) programming language.
