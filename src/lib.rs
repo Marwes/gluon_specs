@@ -684,14 +684,6 @@ pub fn create_script_system(
             )))
         }
     }
-    let reads = read_type
-        .row_iter()
-        .map(|field| &field.typ)
-        .collect::<Vec<_>>();
-    let writes = write_type
-        .row_iter()
-        .map(|field| &field.typ)
-        .collect::<Vec<_>>();
 
     let get_resource = |r| {
         table.get(r).cloned().ok_or_else(|| {
@@ -707,12 +699,14 @@ pub fn create_script_system(
         dependencies: Dependencies {
             thread: thread.root_thread(),
             read_type: read_type.clone(),
-            reads: reads
-                .iter()
+            reads: read_type
+                .row_iter()
+                .map(|field| &field.typ)
                 .map(|r| get_resource(r))
                 .collect::<Result<_, _>>()?,
-            writes: writes
-                .iter()
+            writes: write_type
+                .row_iter()
+                .map(|field| &field.typ)
                 .map(|r| get_resource(r))
                 .collect::<Result<_, _>>()?,
         },
