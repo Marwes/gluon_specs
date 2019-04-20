@@ -516,7 +516,7 @@ where
 
 #[derive(Userdata, Default, VmType)]
 #[gluon(vm_type = "ReflectionTable")]
-pub struct ReflectionTable {
+struct ReflectionTable {
     reflections: MetaTable<Reflection>,
     reflections_mut: MetaTable<ReflectionMut>,
     add_component: HashMap<String, fn(&LazyUpdate, &Thread, Entity, Variants)>,
@@ -529,7 +529,7 @@ impl fmt::Debug for ReflectionTable {
 }
 
 impl ReflectionTable {
-    pub fn register<R>(&mut self, _name: &str, r: &R)
+    fn register<R>(&mut self, _name: &str, r: &R)
     where
         R: Reflection + Resource + Sized,
         Reflection: CastFrom<R>,
@@ -537,7 +537,7 @@ impl ReflectionTable {
         self.reflections.register(r);
     }
 
-    pub fn register_mut<R>(&mut self, name: &str, r: &R)
+    fn register_mut<R>(&mut self, name: &str, r: &R)
     where
         R: ReflectionMut + Resource + Sized,
         ReflectionMut: CastFrom<R>,
@@ -568,7 +568,7 @@ impl ResourceTable {
         self.map.insert(name.to_owned(), ResourceId::new::<T>());
     }
 
-    pub fn register_component<T: Component>(&mut self, name: ArcType) {
+    fn register_component<T: Component>(&mut self, name: ArcType) {
         self.map
             .insert(name.to_owned(), ResourceId::new::<MaskedStorage<T>>());
     }
