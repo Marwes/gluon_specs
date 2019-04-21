@@ -22,3 +22,5 @@ gluon = { path = "../gluon" }
 gluon_vm = { path = "../gluon/vm" }
 gluon_codegen = { path = "../gluon/codegen" }
 
+[dev-dependencies]
+amethyst = "0.10.0"
