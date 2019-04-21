@@ -141,12 +141,12 @@ impl Accessor for Dependencies {
 }
 
 /// A dynamic system that represents and calls the script.
-pub struct DynamicSystem {
+pub struct ScriptSystem {
     dependencies: Dependencies,
     script: OwnedFunction<fn(GluonAny) -> GluonAny>,
 }
 
-impl<'a> System<'a> for DynamicSystem {
+impl<'a> System<'a> for ScriptSystem {
     type SystemData = ScriptSystemData<'a>;
 
     fn run(&mut self, data: Self::SystemData) {
@@ -230,6 +230,8 @@ impl<'a> System<'a> for DynamicSystem {
             })
             .collect();
 
+        outputs.reverse();
+
         let writes = GluonJoinMut {
             writes: &mut writes,
             outputs,
@@ -244,6 +246,81 @@ impl<'a> System<'a> for DynamicSystem {
 
     fn setup(&mut self, _res: &mut shred::Resources) {
         // this could call a setup function of the script
+    }
+}
+
+impl ScriptSystem {
+    pub fn from_script(
+        thread: &Thread,
+        res: &shred::Resources,
+        script: &str,
+    ) -> Result<ScriptSystem, failure::Error> {
+        let (function, typ) = gluon::Compiler::new().run_expr(thread, "script_system", script)?;
+        ScriptSystem::new(thread, res, function, &typ)
+    }
+
+    pub fn new(
+        thread: &Thread,
+        res: &shred::Resources,
+        function: OwnedFunction<fn(GluonAny) -> GluonAny>,
+        update_type: &ArcType,
+    ) -> Result<ScriptSystem, failure::Error> {
+        // -- how we create the system --
+        let table = res.fetch::<ResourceTable>();
+
+        let (read_type, write_type) = match update_type.as_function() {
+            Some(x) => x,
+            None => return Err(failure::err_msg("Expected function type")),
+        };
+        match **read_type {
+            Type::Record(_) => (),
+            _ => {
+                return Err(failure::err_msg(format!(
+                    "Argument type is not a record\nActual: {}",
+                    read_type
+                )))
+            }
+        }
+        match **write_type {
+            Type::Record(_) => (),
+            _ => {
+                return Err(failure::err_msg(format!(
+                    "Return type is not a record\nActual: {}",
+                    write_type
+                )))
+            }
+        }
+
+        let get_resource = |r| {
+            table.get(r).cloned().ok_or_else(|| {
+                failure::err_msg(format!(
+                    "Missing resource `{}`. Existing resources: [{}]",
+                    r,
+                    table.map.keys().format(",")
+                ))
+            })
+        };
+
+        let sys = ScriptSystem {
+            dependencies: Dependencies {
+                thread: thread.root_thread(),
+                read_type: read_type.clone(),
+                reads: read_type
+                    .row_iter()
+                    .map(|field| &field.typ)
+                    .map(|r| get_resource(r))
+                    .collect::<Result<_, _>>()?,
+                writes: write_type
+                    .row_iter()
+                    .map(|field| &field.typ)
+                    .map(|r| get_resource(r))
+                    .collect::<Result<_, _>>()?,
+            },
+            // just pass the function pointer
+            script: function,
+        };
+
+        Ok(sys)
     }
 }
 
@@ -451,7 +528,7 @@ impl<'a, 'e: 'a> Join for GluonJoinMut<'a, 'e> {
         } = value;
 
         // FIXME Don't rely on the indexes being sequential
-        let value = &outputs[index as usize];
+        let value = outputs.pop().unwrap();
         let thread = value.vm();
         // call the script with the input
         match value.get_variant().as_ref() {
@@ -653,70 +730,6 @@ impl<'a> DynamicSystemData<'a> for ScriptSystemData<'a> {
     }
 }
 
-pub fn create_script_system(
-    thread: &Thread,
-    res: &shred::Resources,
-    function: OwnedFunction<fn(GluonAny) -> GluonAny>,
-    update_type: &ArcType,
-) -> Result<DynamicSystem, failure::Error> {
-    // -- how we create the system --
-    let table = res.fetch::<ResourceTable>();
-
-    let (read_type, write_type) = match update_type.as_function() {
-        Some(x) => x,
-        None => return Err(failure::err_msg("Expected function type")),
-    };
-    match **read_type {
-        Type::Record(_) => (),
-        _ => {
-            return Err(failure::err_msg(format!(
-                "Argument type is not a record\nActual: {}",
-                read_type
-            )))
-        }
-    }
-    match **write_type {
-        Type::Record(_) => (),
-        _ => {
-            return Err(failure::err_msg(format!(
-                "Return type is not a record\nActual: {}",
-                write_type
-            )))
-        }
-    }
-
-    let get_resource = |r| {
-        table.get(r).cloned().ok_or_else(|| {
-            failure::err_msg(format!(
-                "Missing resource `{}`. Existing resources: [{}]",
-                r,
-                table.map.keys().format(",")
-            ))
-        })
-    };
-
-    let sys = DynamicSystem {
-        dependencies: Dependencies {
-            thread: thread.root_thread(),
-            read_type: read_type.clone(),
-            reads: read_type
-                .row_iter()
-                .map(|field| &field.typ)
-                .map(|r| get_resource(r))
-                .collect::<Result<_, _>>()?,
-            writes: write_type
-                .row_iter()
-                .map(|field| &field.typ)
-                .map(|r| get_resource(r))
-                .collect::<Result<_, _>>()?,
-        },
-        // just pass the function pointer
-        script: function,
-    };
-
-    Ok(sys)
-}
-
 pub fn register_component<T>(world: &mut specs::World, thread: &gluon::Thread, name: &str)
 where
     T: Component + VmType + MarshalFrom + Send + Sync,
@@ -808,9 +821,8 @@ mod tests {
         vm: &Thread,
         res: &shred::Resources,
         script: &str,
-    ) -> Result<DynamicSystem, failure::Error> {
-        let (function, typ) = gluon::Compiler::new().run_expr(&vm, "update", script)?;
-        create_script_system(vm, res, function, &typ)
+    ) -> Result<ScriptSystem, failure::Error> {
+        ScriptSystem::from_script(vm, res, script)
     }
 
     #[test]
@@ -845,6 +857,29 @@ mod tests {
             .with(script0, "script0", &[])
             .build();
 
+        let entity = world.create_entity().with(Test(1)).build();
+
+        for _ in 0..2 {
+            scripts.dispatch(&mut world.res);
+        }
+
+        assert_eq!(world.read_storage::<Test>().get(entity), Some(&Test(3)));
+    }
+
+    #[test]
+    fn update_component_with_extra_entities() {
+        let vm = new_vm();
+        let mut world = test_world(&vm);
+
+        register_component::<Test>(&mut world, &vm, "Test");
+
+        let script = r#"let f: { test : Test } -> _ = \x -> { test =  x.test + 1 } in f"#;
+        let script0 = test_script_sys(&vm, &world.res, script).unwrap();
+        let mut scripts = DispatcherBuilder::new()
+            .with(script0, "script0", &[])
+            .build();
+
+        world.create_entity().build();
         let entity = world.create_entity().with(Test(1)).build();
 
         for _ in 0..2 {
