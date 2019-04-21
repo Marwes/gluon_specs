@@ -1,5 +1,5 @@
 // in a real application you would use `fnv`
-use std::{collections::HashMap, fmt, mem};
+use std::{collections::HashMap, fmt, fs, mem, path::Path};
 
 use failure;
 
@@ -250,12 +250,26 @@ impl<'a> System<'a> for ScriptSystem {
 }
 
 impl ScriptSystem {
+    pub fn from_file<P>(
+        thread: &Thread,
+        res: &shred::Resources,
+        filename: &P,
+    ) -> Result<ScriptSystem, failure::Error>
+    where
+        P: AsRef<Path> + ?Sized,
+    {
+        let module_name = gluon::base::filename_to_module(&filename.as_ref().display().to_string());
+        let script = fs::read_to_string(filename)?;
+        Self::from_script(thread, res, &module_name, &script)
+    }
+
     pub fn from_script(
         thread: &Thread,
         res: &shred::Resources,
+        name: &str,
         script: &str,
     ) -> Result<ScriptSystem, failure::Error> {
-        let (function, typ) = gluon::Compiler::new().run_expr(thread, "script_system", script)?;
+        let (function, typ) = gluon::Compiler::new().run_expr(thread, name, script)?;
         ScriptSystem::new(thread, res, function, &typ)
     }
 
@@ -834,7 +848,7 @@ mod tests {
         res: &shred::Resources,
         script: &str,
     ) -> Result<ScriptSystem, failure::Error> {
-        ScriptSystem::from_script(vm, res, script)
+        ScriptSystem::from_script(vm, res, "test", script)
     }
 
     #[test]

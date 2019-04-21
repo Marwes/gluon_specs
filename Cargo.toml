@@ -24,3 +24,4 @@ gluon_codegen = { path = "../gluon/codegen" }
 
 [dev-dependencies]
 amethyst = "0.10.0"
+walkdir = "2"

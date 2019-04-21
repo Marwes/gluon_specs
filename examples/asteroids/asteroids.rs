@@ -1,5 +1,3 @@
-use std::fs;
-
 use amethyst::{
     assets::{AssetStorage, Loader},
     core::transform::Transform,
@@ -96,17 +94,27 @@ impl SimpleState for Asteroids {
         initialise_camera(world);
         initialise_player(world);
 
-        let script_system = gluon_specs::ScriptSystem::from_script(
-            &self.thread,
-            &world.res,
-            &fs::read_to_string("examples/asteroids/system.glu")
-                .unwrap_or_else(|err| panic!("{}", err)),
-        )
-        .unwrap_or_else(|err| panic!("{}", err));
-        self.script_dispatcher = specs::DispatcherBuilder::new()
-            .with(InputSystem, "input_system", &[])
-            .with(script_system, "script_system", &["input_system"])
-            .with(PositionSystem, "position_system", &["script_system"])
+        let mut dispatcher_builder =
+            specs::DispatcherBuilder::new().with(InputSystem, "input_system", &[]);
+
+        dispatcher_builder.add_barrier();
+
+        for entry in walkdir::WalkDir::new("examples/asteroids/system")
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("glu"))
+        {
+            let script_system =
+                gluon_specs::ScriptSystem::from_file(&self.thread, &world.res, entry.path())
+                    .unwrap_or_else(|err| panic!("{}", err));
+
+            dispatcher_builder.add(script_system, &entry.path().display().to_string(), &[]);
+        }
+
+        dispatcher_builder.add_barrier();
+
+        self.script_dispatcher = dispatcher_builder
+            .with(PositionSystem, "position_system", &[])
             .build();
     }
 
