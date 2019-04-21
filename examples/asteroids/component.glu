@@ -1,4 +1,4 @@
-let { negate } = import! std.num
+let entity = import! entity
 
 #[implicit]
 type AddComponent a = { component_name : String }
@@ -28,6 +28,9 @@ let pos_component : AddComponent Position = { component_name = "Position" }
 let motion_component : AddComponent Motion = { component_name = "Motion" }
 let rotation_component : AddComponent Motion = { component_name = "Rotation" }
 
+let add_component ?c l r a e : [AddComponent a] -> LazyUpdate -> ReflectionTable -> a -> Entity -> () =
+    entity.add_component l r c.component_name a e
+
 {
     Position,
     Motion,
@@ -42,6 +45,8 @@ let rotation_component : AddComponent Motion = { component_name = "Rotation" }
     new_pos,
     pos_component,
     motion_component,
+
+    add_component,
     ..
     import! component_prim
 }
