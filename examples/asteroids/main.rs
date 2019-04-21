@@ -2,13 +2,42 @@ extern crate amethyst;
 
 use amethyst::{
     prelude::*,
-    renderer::{DisplayConfig, DrawFlat, Pipeline, PosNormTex, RenderBundle, Stage},
+    renderer::{
+        DisplayConfig, DrawFlat, Event, KeyboardInput, Pipeline, PosNormTex, RenderBundle, Stage,
+        VirtualKeyCode, WindowEvent,
+    },
     utils::application_root_dir,
 };
 
-struct Example;
+struct Asteroids;
 
-impl SimpleState for Example {}
+impl SimpleState for Asteroids {
+    fn handle_event(&mut self, _: StateData<GameData>, event: StateEvent) -> SimpleTrans {
+        if let StateEvent::Window(event) = &event {
+            match event {
+                Event::WindowEvent { event, .. } => match event {
+                    WindowEvent::KeyboardInput {
+                        input:
+                            KeyboardInput {
+                                virtual_keycode: Some(VirtualKeyCode::Escape),
+                                ..
+                            },
+                        ..
+                    }
+                    | WindowEvent::CloseRequested => Trans::Quit,
+                    _ => Trans::None,
+                },
+                _ => Trans::None,
+            }
+        } else {
+            Trans::None
+        }
+    }
+
+    fn update(&mut self, _: &mut StateData<GameData>) -> SimpleTrans {
+        Trans::None
+    }
+}
 
 fn main() -> amethyst::Result<()> {
     amethyst::start_logger(Default::default());
@@ -25,9 +54,11 @@ fn main() -> amethyst::Result<()> {
             .with_pass(DrawFlat::<PosNormTex>::new()),
     );
 
+    let state = Asteroids;
+
     let game_data =
         GameDataBuilder::default().with_bundle(RenderBundle::new(pipe, Some(config)))?;
-    let mut game = Application::new("./", Example, game_data)?;
+    let mut game = Application::new("./", state, game_data)?;
 
     game.run();
 
