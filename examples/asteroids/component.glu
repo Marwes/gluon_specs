@@ -1,9 +1,19 @@
+let { negate } = import! std.num
 
 #[implicit]
 type AddComponent a = { component_name : String }
     
 #[derive(Eq, Show)]
 type Vec2 = { x : Float, y : Float }
+
+let num_Vec2 : Num Vec2 = {
+    ord = { eq = eq_Vec2, compare = \_ _ -> error "Unimplemented" },
+    (+) = \l r -> { x = l.x + r.x, y = l.y + r.y },
+    (-) = \l r -> { x = l.x - r.x, y = l.y - r.y },
+    (*) = \l r -> { x = l.x * r.x, y = l.y * r.y },
+    (/) = \l r -> { x = l.x / r.x, y = l.y / r.y },
+    negate = \x -> { x = negate x.x, y = negate x.y },
+}
 
 type Position = Vec2
 
@@ -12,17 +22,22 @@ let new_pos x y : Float -> Float -> Position = { x, y }
 #[derive(Eq, Show)]
 type Motion = { velocity : Vec2, acceleration : Vec2 }
 
+type Rotation = Float
+
 let pos_component : AddComponent Position = { component_name = "Position" }
 let motion_component : AddComponent Motion = { component_name = "Motion" }
+let rotation_component : AddComponent Motion = { component_name = "Rotation" }
 
 {
     Position,
     Motion,
+    Rotation,
 
     AddComponent,
 
     eq_Vec2,
     show_Vec2,
+    num_Vec2,
 
     new_pos,
     pos_component,

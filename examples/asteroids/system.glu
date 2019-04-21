@@ -1,32 +1,20 @@
 let { negate } = import! std.num
+let { pi } = import! std.float
 let entity = import! entity
 
-let { AddComponent, Position, Motion, eq_Vec2, motion_component, new_pos, ? } = import! gluon_component
+let { AddComponent, Position, Motion, Rotation, ? } = import! component
 
 let new_vel x y : Float -> Float -> Position = { x, y }
 
 let add_component ?c l r a e : [AddComponent a] -> LazyUpdate -> ReflectionTable -> a -> Entity -> () =
     entity.add_component l r c.component_name a e
 
-let num_Position : Num Position = {
-    ord = { eq = eq_Vec2, compare = \_ _ -> error "Unimplemented" },
-    (+) = \l r -> { x = l.x + r.x, y = l.y + r.y },
-    (-) = \l r -> { x = l.x - r.x, y = l.y - r.y },
-    (*) = \l r -> { x = l.x * r.x, y = l.y * r.y },
-    (/) = \l r -> { x = l.x / r.x, y = l.y / r.y },
-    negate = \x -> { x = negate x.x, y = negate x.y },
-}
 
+let update r : { pos : Position, rot: Rotation } -> { pos : Position, rot : Rotation } =
+    let { pos, rot } = r
 
-let update r : { pos : Position, entities : EntitiesRes, lazy_update : LazyUpdate, reflection_table : ReflectionTable } -> { pos : Position } =
-    let { pos, entities, lazy_update, reflection_table } = r
-    let dt = 0.1
-    let pos =
-        if pos.y > 300.0 then
-            { x = 0., y = 0.0 }
-        else
-            pos
+    let rot = rot + 0.1
 
-    { pos }
+    { pos = pos + { x = 1., y = 0. }, rot }
 
 update
