@@ -1,43 +1,13 @@
 extern crate amethyst;
 
 use amethyst::{
+    core::transform::TransformBundle,
     prelude::*,
-    renderer::{
-        DisplayConfig, DrawFlat, Event, KeyboardInput, Pipeline, PosNormTex, RenderBundle, Stage,
-        VirtualKeyCode, WindowEvent,
-    },
+    renderer::{DisplayConfig, DrawFlat, Pipeline, PosNormTex, RenderBundle, Stage},
     utils::application_root_dir,
 };
 
-struct Asteroids;
-
-impl SimpleState for Asteroids {
-    fn handle_event(&mut self, _: StateData<GameData>, event: StateEvent) -> SimpleTrans {
-        if let StateEvent::Window(event) = &event {
-            match event {
-                Event::WindowEvent { event, .. } => match event {
-                    WindowEvent::KeyboardInput {
-                        input:
-                            KeyboardInput {
-                                virtual_keycode: Some(VirtualKeyCode::Escape),
-                                ..
-                            },
-                        ..
-                    }
-                    | WindowEvent::CloseRequested => Trans::Quit,
-                    _ => Trans::None,
-                },
-                _ => Trans::None,
-            }
-        } else {
-            Trans::None
-        }
-    }
-
-    fn update(&mut self, _: &mut StateData<GameData>) -> SimpleTrans {
-        Trans::None
-    }
-}
+mod asteroids;
 
 fn main() -> amethyst::Result<()> {
     amethyst::start_logger(Default::default());
@@ -50,14 +20,15 @@ fn main() -> amethyst::Result<()> {
 
     let pipe = Pipeline::build().with_stage(
         Stage::with_backbuffer()
-            .clear_target([0.00196, 0.23726, 0.21765, 1.0], 1.0)
+            .clear_target([0.0, 0.0, 0.0, 1.0], 1.0)
             .with_pass(DrawFlat::<PosNormTex>::new()),
     );
 
-    let state = Asteroids;
+    let state = asteroids::Asteroids;
 
-    let game_data =
-        GameDataBuilder::default().with_bundle(RenderBundle::new(pipe, Some(config)))?;
+    let game_data = GameDataBuilder::default()
+        .with_bundle(RenderBundle::new(pipe, Some(config)))?
+        .with_bundle(TransformBundle::new())?;
     let mut game = Application::new("./", state, game_data)?;
 
     game.run();
