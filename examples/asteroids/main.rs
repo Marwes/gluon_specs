@@ -9,6 +9,9 @@ use amethyst::{
 
 mod asteroids;
 
+type InputHandler = amethyst::input::InputHandler<String, String>;
+type InputBundle = amethyst::input::InputBundle<String, String>;
+
 fn main() -> amethyst::Result<()> {
     amethyst::start_logger(amethyst::LoggerConfig {
         level_filter: amethyst::LogLevelFilter::Warn,
@@ -31,7 +34,8 @@ fn main() -> amethyst::Result<()> {
 
     let game_data = GameDataBuilder::default()
         .with_bundle(RenderBundle::new(pipe, Some(config)).with_sprite_sheet_processor())?
-        .with_bundle(TransformBundle::new())?;
+        .with_bundle(TransformBundle::new())?
+        .with_bundle(InputBundle::new())?;
     let mut game = Application::new("./examples/assets", state, game_data)?;
 
     game.run();

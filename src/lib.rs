@@ -342,20 +342,21 @@ pub trait ReflectionMut: Reflection {
     }
 }
 
+#[macro_export]
 macro_rules! impl_reflection {
     ($($ty: ty),*) => {
         $(
-            impl Reflection for $ty {
-                fn open<'a>(&'a self, _entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a > {
+            impl $crate::Reflection for $ty {
+                fn open<'a>(&'a self, _entities: shred::Fetch<'a, specs::world::EntitiesRes>) -> Box<$crate::ReflectionStorage + 'a > {
                     Box::new(self)
                 }
             }
 
-            impl<'a> ReflectionStorage for &'a $ty {
-                fn mask(&self) -> Option<&BitSet> {
+            impl<'a> $crate::ReflectionStorage for &'a $ty {
+                fn mask(&self) -> Option<&specs::BitSet> {
                     None
                 }
-                unsafe fn get(&self, _index: u32) -> &MarshalTo {
+                unsafe fn get(&self, _index: u32) -> &$crate::MarshalTo {
                     *self
                 }
             }
@@ -743,6 +744,17 @@ where
         resource_table.register_component::<T>(typ);
     }
     world.register::<T>();
+}
+
+pub fn register<T>(world: &mut shred::Resources, thread: &gluon::Thread, name: &str)
+where
+    T: Component + Reflection + VmType + MarshalFrom + Send + Sync + Default,
+{
+    let mut reflection_table = world.fetch_mut::<ReflectionTable>();
+    let mut resource_table = world.fetch_mut::<ResourceTable>();
+    reflection_table.register(name, &<T>::default());
+    let typ = <T as gluon::vm::api::VmType>::make_type(thread);
+    resource_table.register::<T>(typ);
 }
 
 macro_rules! register {

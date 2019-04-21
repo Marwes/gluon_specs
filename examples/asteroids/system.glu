@@ -2,7 +2,7 @@ let { negate } = import! std.num
 let { pi } = import! std.float
 let entity = import! entity
 
-let { AddComponent, Position, Motion, Rotation, ? } = import! component
+let { AddComponent, Position, Motion, Rotation, Direction, ? } = import! component
 
 let new_vel x y : Float -> Float -> Position = { x, y }
 
@@ -10,11 +10,15 @@ let add_component ?c l r a e : [AddComponent a] -> LazyUpdate -> ReflectionTable
     entity.add_component l r c.component_name a e
 
 
-let update r : { pos : Position, rot: Rotation } -> { pos : Position, rot : Rotation } =
-    let { pos, rot } = r
+let update r : { input: Input, pos : Position, rot: Rotation } -> { pos : Position, rot : Rotation } =
+    let { input, pos, rot } = r
 
-    let rot = rot + 0.1
+    let rot_diff =
+        match input.direction with
+        | Left -> -0.1
+        | Right -> 0.1
+        | None -> 0.0
 
-    { pos = pos + { x = 1., y = 0. }, rot }
+    { pos = pos + { x = 1., y = 0. }, rot = rot + rot_diff }
 
 update

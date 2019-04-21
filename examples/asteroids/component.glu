@@ -42,4 +42,6 @@ let rotation_component : AddComponent Motion = { component_name = "Rotation" }
     new_pos,
     pos_component,
     motion_component,
+    ..
+    import! component_prim
 }

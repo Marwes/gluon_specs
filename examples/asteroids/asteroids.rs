@@ -3,6 +3,7 @@ use std::fs;
 use amethyst::{
     assets::{AssetStorage, Loader},
     core::transform::Transform,
+    input::Button,
     prelude::*,
     renderer::{
         Camera, Event, KeyboardInput, PngFormat, Projection, SpriteRender, SpriteSheet,
@@ -33,6 +34,31 @@ gluon_specs::impl_clone_marshal!(Position);
 struct Rotation(f32);
 gluon_specs::impl_clone_marshal!(Rotation);
 
+#[derive(Clone, Debug, Component, VmType, Getable, Pushable)]
+#[gluon(newtype)]
+enum Direction {
+    Left,
+    Right,
+    None,
+}
+gluon_specs::impl_clone_marshal!(Direction);
+gluon_specs::impl_reflection!(Direction);
+
+impl Default for Direction {
+    fn default() -> Self {
+        Direction::None
+    }
+}
+
+#[derive(Clone, Debug, Default, Component, VmType, Getable, Pushable)]
+#[gluon(newtype)]
+struct Input {
+    direction: Direction,
+    shoot: bool,
+}
+gluon_specs::impl_clone_marshal!(Input);
+gluon_specs::impl_reflection!(Input);
+
 pub struct Asteroids {
     thread: gluon::RootedThread,
     script_dispatcher: specs::Dispatcher<'static, 'static>,
@@ -57,11 +83,15 @@ impl SimpleState for Asteroids {
 
         world.register::<Player>();
 
+        initialise_gluon(&self.thread);
         gluon::Compiler::new()
             .load_file(&self.thread, "component.glu")
             .unwrap_or_else(|err| panic!("{}", err));
+
         gluon_specs::register_component::<Position>(world, &self.thread, "Position");
         gluon_specs::register_component::<Rotation>(world, &self.thread, "Rotation");
+        gluon_specs::register::<Input>(&mut world.res, &self.thread, "Input");
+        world.res.entry().or_insert_with(Input::default);
 
         initialise_camera(world);
         initialise_player(world);
@@ -74,7 +104,8 @@ impl SimpleState for Asteroids {
         )
         .unwrap_or_else(|err| panic!("{}", err));
         self.script_dispatcher = specs::DispatcherBuilder::new()
-            .with(script_system, "script_system", &[])
+            .with(InputSystem, "input_system", &[])
+            .with(script_system, "script_system", &["input_system"])
             .with(PositionSystem, "position_system", &["script_system"])
             .build();
     }
@@ -166,7 +197,22 @@ fn initialise_player(world: &mut World) {
         .build();
 }
 
-use specs::{Join, ReadStorage, System, WriteStorage};
+fn initialise_gluon(thread: &gluon::Thread) {
+    use gluon::vm::{self, record, ExternModule};
+    fn load(thread: &gluon::Thread) -> vm::Result<ExternModule> {
+        ExternModule::new(
+            thread,
+            record! {
+                type Direction => Direction,
+                type Input => Input,
+            },
+        )
+    }
+
+    gluon::import::add_extern_module(thread, "component_prim", load);
+}
+
+use specs::{Join, Read, ReadStorage, System, Write, WriteStorage};
 
 struct PositionSystem;
 impl<'s> System<'s> for PositionSystem {
@@ -183,5 +229,21 @@ impl<'s> System<'s> for PositionSystem {
                 .set_y(position.y)
                 .set_rotation_euler(0., 0., rotation.0);
         }
+    }
+}
+
+struct InputSystem;
+impl<'s> System<'s> for InputSystem {
+    type SystemData = (Read<'s, crate::InputHandler>, Write<'s, Input>);
+
+    fn run(&mut self, (input_handler, mut input): Self::SystemData) {
+        input.direction = if input_handler.button_is_down(Button::Key(VirtualKeyCode::Left)) {
+            Direction::Left
+        } else if input_handler.button_is_down(Button::Key(VirtualKeyCode::Right)) {
+            Direction::Right
+        } else {
+            Direction::None
+        };
+        input.shoot = input_handler.button_is_down(Button::Key(VirtualKeyCode::Space));
     }
 }
