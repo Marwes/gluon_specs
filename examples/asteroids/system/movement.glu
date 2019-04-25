@@ -3,8 +3,8 @@ let { pi } = import! std.float
 
 let { AddComponent, Position, Motion, Rotation, Direction, ? } = import! component
 
-let update r : { input: Input, pos : Position, rot: Rotation } -> { pos : Position, rot : Rotation } =
-    let { input, pos, rot } = r
+let update r : { input: Input, pos : Position, rot: Rotation, motion : Motion } -> { pos : Position, rot : Rotation, motion : Motion } =
+    let { input, pos, rot, motion } = r
 
     let rot_diff =
         match input.direction with
@@ -12,6 +12,10 @@ let update r : { input: Input, pos : Position, rot: Rotation } -> { pos : Positi
         | Right -> 0.1
         | None -> 0.0
 
-    { pos = pos + { x = 1., y = 0. }, rot = rot + rot_diff }
+    {
+        pos = pos + motion.velocity,
+        rot = rot + rot_diff,
+        motion,
+    }
 
 update

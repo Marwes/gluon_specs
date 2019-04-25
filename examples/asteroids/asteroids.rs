@@ -19,13 +19,25 @@ pub const ARENA_WIDTH: f32 = 300.0;
 #[gluon(newtype)]
 struct Player;
 
-#[derive(Clone, Debug, Component, VmType, Getable, Pushable)]
-#[gluon(vm_type = "component.Position")]
-struct Position {
+#[derive(Clone, Debug, Default, VmType, Getable, Pushable)]
+#[gluon(vm_type = "component.Vec2")]
+struct Vec2 {
     x: f32,
     y: f32,
 }
+
+#[derive(Clone, Debug, Component, VmType, Getable, Pushable)]
+#[gluon(vm_type = "component.Position")]
+struct Position(Vec2);
 gluon_specs::impl_clone_marshal!(Position);
+
+#[derive(Clone, Debug, Default, Component, VmType, Getable, Pushable)]
+#[gluon(vm_type = "component.Motion")]
+struct Motion {
+    velocity: Vec2,
+    acceleration: Vec2,
+}
+gluon_specs::impl_clone_marshal!(Motion);
 
 #[derive(Clone, Debug, Component, VmType, Getable, Pushable)]
 #[gluon(vm_type = "component.Rotation")]
@@ -77,6 +89,16 @@ impl SimpleState for Asteroids {
     fn on_start(&mut self, data: StateData<'_, GameData<'_, '_>>) {
         let world = data.world;
 
+        world
+            .res
+            .fetch_mut::<amethyst::core::frame_limiter::FrameLimiter>()
+            .set_rate(
+                amethyst::core::frame_limiter::FrameRateLimitStrategy::SleepAndYield(
+                    ::std::time::Duration::from_millis(1),
+                ),
+                60,
+            );
+
         gluon_specs::init_resources(&mut world.res, &self.thread);
 
         world.register::<Player>();
@@ -87,6 +109,7 @@ impl SimpleState for Asteroids {
             .unwrap_or_else(|err| panic!("{}", err));
 
         gluon_specs::register_component::<Position>(world, &self.thread, "Position");
+        gluon_specs::register_component::<Motion>(world, &self.thread, "Motion");
         gluon_specs::register_component::<Rotation>(world, &self.thread, "Rotation");
         gluon_specs::register::<Input>(&mut world.res, &self.thread, "Input");
         world.res.entry().or_insert_with(Input::default);
@@ -140,7 +163,7 @@ impl SimpleState for Asteroids {
         }
     }
 
-    fn update(&mut self, data: &mut StateData<GameData>) -> SimpleTrans {
+    fn fixed_update(&mut self, data: StateData<GameData>) -> SimpleTrans {
         self.script_dispatcher.dispatch(&data.world.res);
         Trans::None
     }
@@ -195,10 +218,11 @@ fn initialise_player(world: &mut World) {
             sprite_sheet,
             sprite_number: 0,
         })
-        .with(Position {
+        .with(Position(Vec2 {
             x: transform.translation().x,
             y: transform.translation().y,
-        })
+        }))
+        .with(Motion::default())
         .with(Rotation(0.0))
         .with(transform)
         .with(Player)
@@ -233,8 +257,8 @@ impl<'s> System<'s> for PositionSystem {
     fn run(&mut self, (mut t, p, r): Self::SystemData) {
         for (transform, position, rotation) in (&mut t, &p, &r).join() {
             transform
-                .set_x(position.x)
-                .set_y(position.y)
+                .set_x(position.0.x)
+                .set_y(position.0.y)
                 .set_rotation_euler(0., 0., rotation.0);
         }
     }
