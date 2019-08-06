@@ -34,7 +34,7 @@ use gluon::{
     RootedThread, Thread,
 };
 
-use gluon_codegen::{Userdata, VmType};
+use gluon_codegen::{Trace, Userdata, VmType};
 
 pub use gluon;
 
@@ -92,8 +92,9 @@ macro_rules! impl_clone_marshal {
     };
 }
 
-#[derive(Userdata, VmType)]
+#[derive(Userdata, Trace, VmType)]
 #[gluon(vm_type = "EntitiesRes")]
+#[gluon_trace(skip)]
 #[repr(transparent)]
 struct GluonEntities(EntitiesRes);
 
@@ -103,8 +104,9 @@ impl fmt::Debug for GluonEntities {
     }
 }
 
-#[derive(Userdata, Default, VmType)]
+#[derive(Userdata, Trace, Default, VmType)]
 #[gluon(vm_type = "LazyUpdate")]
+#[gluon_trace(skip)]
 #[repr(transparent)]
 struct GluonLazyUpdate(LazyUpdate);
 
@@ -504,7 +506,7 @@ impl<'a> Join for GluonJoin<'a> {
             .unwrap();
         let mut context = thread.current_context();
         let variant = context.pop();
-        <GluonAny as Getable>::from_value(thread, *variant)
+        <GluonAny as Getable>::from_value(thread, variant.clone())
     }
 }
 
@@ -557,7 +559,8 @@ impl<'a, 'e: 'a> Join for GluonJoinMut<'a, 'e> {
     }
 }
 
-#[derive(Userdata, Debug, VmType)]
+#[derive(Userdata, Trace, Debug, VmType)]
+#[gluon_trace(skip)]
 #[gluon(vm_type = "Entity")]
 struct GluonEntity(Entity);
 
@@ -606,7 +609,8 @@ where
     }
 }
 
-#[derive(Userdata, Default, VmType)]
+#[derive(Userdata, Trace, Default, VmType)]
+#[gluon_trace(skip)]
 #[gluon(vm_type = "ReflectionTable")]
 struct ReflectionTable {
     reflections: MetaTable<Reflection>,
@@ -643,7 +647,8 @@ impl ReflectionTable {
 }
 
 /// Maps resource names to resource ids.
-#[derive(Userdata, Debug, Default, VmType)]
+#[derive(Userdata, Trace, Debug, Default, VmType)]
+#[gluon_trace(skip)]
 #[gluon(vm_type = "ResourceTable")]
 struct ResourceTable {
     map: HashMap<ArcType, ResourceId>,

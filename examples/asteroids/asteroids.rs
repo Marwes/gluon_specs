@@ -1,11 +1,14 @@
 use amethyst::{
     assets::{AssetStorage, Loader},
     core::transform::Transform,
+    ecs::{Component, DenseVecStorage},
     input::Button,
     prelude::*,
     renderer::{
-        Camera, Event, KeyboardInput, PngFormat, Projection, SpriteRender, SpriteSheet,
-        SpriteSheetFormat, Texture, TextureMetadata, VirtualKeyCode, WindowEvent,
+        camera::Projection,
+        formats::texture::ImageFormat,
+        rendy::wsi::winit::{Event, KeyboardInput, VirtualKeyCode, WindowEvent},
+        Camera, SpriteRender, SpriteSheet, SpriteSheetFormat, Texture,
     },
 };
 
@@ -171,7 +174,7 @@ impl SimpleState for Asteroids {
 
 fn initialise_camera(world: &mut World) {
     let mut transform = Transform::default();
-    transform.set_z(1.0);
+    transform.set_translation_z(1.0);
     world
         .create_entity()
         .with(Camera::from(Projection::orthographic(
@@ -179,6 +182,8 @@ fn initialise_camera(world: &mut World) {
             ARENA_WIDTH,
             0.0,
             ARENA_HEIGHT,
+            0.0,
+            0.0,
         )))
         .with(transform)
         .build();
@@ -190,8 +195,7 @@ fn initialise_player(world: &mut World) {
         let texture_storage = world.read_resource::<AssetStorage<Texture>>();
         loader.load(
             "texture/asteroids_spritesheet.png",
-            PngFormat,
-            TextureMetadata::srgb_scale(),
+            ImageFormat::default(),
             (),
             &texture_storage,
         )
@@ -202,15 +206,16 @@ fn initialise_player(world: &mut World) {
         let sprite_sheet_store = world.read_resource::<AssetStorage<SpriteSheet>>();
         loader.load(
             "texture/asteroids_spritesheet.ron", // Here we load the associated ron file
-            SpriteSheetFormat,
-            texture_handle, // We pass it the handle of the texture we want it to use
+            SpriteSheetFormat(texture_handle), // We pass it the handle of the texture we want it to use
             (),
             &sprite_sheet_store,
         )
     };
 
     let mut transform = Transform::default();
-    transform.set_x(ARENA_WIDTH / 2.).set_y(ARENA_HEIGHT / 2.);
+    transform
+        .set_translation_x(ARENA_WIDTH / 2.)
+        .set_translation_y(ARENA_HEIGHT / 2.);
 
     world
         .create_entity()
@@ -257,8 +262,8 @@ impl<'s> System<'s> for PositionSystem {
     fn run(&mut self, (mut t, p, r): Self::SystemData) {
         for (transform, position, rotation) in (&mut t, &p, &r).join() {
             transform
-                .set_x(position.0.x)
-                .set_y(position.0.y)
+                .set_translation_x(position.0.x)
+                .set_translation_y(position.0.y)
                 .set_rotation_euler(0., 0., rotation.0);
         }
     }
