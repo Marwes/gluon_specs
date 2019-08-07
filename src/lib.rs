@@ -43,13 +43,13 @@ type GluonAny = OpaqueValue<RootedThread, Hole>;
 /// Some trait that all of your dynamic resources should implement.
 /// This trait should be able to register / transfer it to the scripting framework.
 pub trait MarshalTo {
-    fn to_gluon<'a>(&'a self, thread: &Thread, proxies: &mut Vec<Box<Dropbox + 'a>>);
+    fn to_gluon<'a>(&'a self, thread: &Thread, proxies: &mut Vec<Box<dyn Dropbox + 'a>>);
 }
 
 pub trait MarshalFrom: MarshalTo {
-    fn from_gluon(&mut self, thread: &Thread, variants: Variants);
+    fn from_gluon(&mut self, thread: &Thread, variants: Variants<'_>);
 
-    fn new_value(thread: &Thread, variants: Variants) -> Self
+    fn new_value(thread: &Thread, variants: Variants<'_>) -> Self
     where
         Self: Sized;
 }
@@ -59,7 +59,7 @@ where
     T: Userdata + VmType,
     T: ::std::fmt::Debug,
 {
-    fn to_gluon<'a>(&'a self, thread: &Thread, proxies: &mut Vec<Box<Dropbox + 'a>>) {
+    fn to_gluon<'a>(&'a self, thread: &Thread, proxies: &mut Vec<Box<dyn Dropbox + 'a>>) {
         let mut proxy = scoped::Ref::new(self);
         Pushable::push(&mut proxy, &mut thread.current_context()).unwrap();
         proxies.push(Box::new(proxy));
@@ -73,7 +73,7 @@ macro_rules! impl_clone_marshal {
             fn to_gluon<'a>(
                 &'a self,
                 thread: &gluon::Thread,
-                _proxies: &mut Vec<Box<$crate::Dropbox + 'a>>,
+                _proxies: &mut Vec<Box<dyn $crate::Dropbox + 'a>>,
             ) {
                 $crate::gluon::vm::api::Pushable::push(self.clone(), &mut thread.current_context())
                     .unwrap()
@@ -81,11 +81,11 @@ macro_rules! impl_clone_marshal {
         }
 
         impl $crate::MarshalFrom for $ty {
-            fn from_gluon(&mut self, thread: &gluon::Thread, variants: gluon::vm::Variants) {
+            fn from_gluon(&mut self, thread: &gluon::Thread, variants: gluon::vm::Variants<'_>) {
                 *self = Self::new_value(thread, variants);
             }
 
-            fn new_value(thread: &gluon::Thread, variants: gluon::vm::Variants) -> Self {
+            fn new_value(thread: &gluon::Thread, variants: gluon::vm::Variants<'_>) -> Self {
                 $crate::gluon::vm::api::Getable::from_value(thread, variants)
             }
         }
@@ -99,7 +99,7 @@ macro_rules! impl_clone_marshal {
 struct GluonEntities(EntitiesRes);
 
 impl fmt::Debug for GluonEntities {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "GluonEntities(..)")
     }
 }
@@ -111,7 +111,7 @@ impl fmt::Debug for GluonEntities {
 struct GluonLazyUpdate(LazyUpdate);
 
 impl fmt::Debug for GluonLazyUpdate {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "LazyUpdate(..)")
     }
 }
@@ -192,7 +192,7 @@ impl<'a> System<'a> for ScriptSystem {
                 .map(|resource| {
                     let res = Box::as_ref(resource);
 
-                    let res: &Reflection = meta
+                    let res: &dyn Reflection = meta
                         .reflections
                         .get(res)
                         .expect("Not registered in meta table");
@@ -223,7 +223,7 @@ impl<'a> System<'a> for ScriptSystem {
             .map(|resource| {
                 let res = Box::as_mut(resource);
 
-                let res: &mut ReflectionMut = meta
+                let res: &mut dyn ReflectionMut = meta
                     .reflections_mut
                     .get_mut(res)
                     .expect("Not registered in meta table");
@@ -341,15 +341,15 @@ impl ScriptSystem {
 }
 
 pub trait Reflection {
-    fn open<'a>(&'a self, entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a>;
+    fn open<'a>(&'a self, entities: Fetch<'a, EntitiesRes>) -> Box<dyn ReflectionStorage + 'a>;
 }
 
 pub trait ReflectionMut: Reflection {
     fn open_mut<'a>(
         &'a mut self,
         entities: Fetch<'a, EntitiesRes>,
-    ) -> Box<ReflectionStorageMut + 'a>;
-    fn add_component(lazy: &LazyUpdate, thread: &Thread, entity: Entity, value: Variants)
+    ) -> Box<dyn ReflectionStorageMut + 'a>;
+    fn add_component(lazy: &LazyUpdate, thread: &Thread, entity: Entity, value: Variants<'_>)
     where
         Self: Sized,
     {
@@ -363,7 +363,7 @@ macro_rules! impl_reflection {
     ($($ty: ty),*) => {
         $(
             impl $crate::Reflection for $ty {
-                fn open<'a>(&'a self, _entities: shred::Fetch<'a, specs::world::EntitiesRes>) -> Box<$crate::ReflectionStorage + 'a > {
+                fn open<'a>(&'a self, _entities: shred::Fetch<'a, specs::world::EntitiesRes>) -> Box<dyn $crate::ReflectionStorage + 'a > {
                     Box::new(self)
                 }
             }
@@ -372,7 +372,7 @@ macro_rules! impl_reflection {
                 fn mask(&self) -> Option<&specs::BitSet> {
                     None
                 }
-                unsafe fn get(&self, _index: u32) -> &$crate::MarshalTo {
+                unsafe fn get(&self, _index: u32) -> &dyn $crate::MarshalTo {
                     *self
                 }
             }
@@ -384,7 +384,7 @@ macro_rules! impl_reflection {
 impl_reflection! { ResourceTable, ReflectionTable, GluonEntities, GluonLazyUpdate }
 
 impl Reflection for EntitiesRes {
-    fn open<'a>(&'a self, _entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a> {
+    fn open<'a>(&'a self, _entities: Fetch<'a, EntitiesRes>) -> Box<dyn ReflectionStorage + 'a> {
         Box::new(self)
     }
 }
@@ -393,13 +393,13 @@ impl<'a> ReflectionStorage for &'a EntitiesRes {
     fn mask(&self) -> Option<&BitSet> {
         None
     }
-    unsafe fn get(&self, _index: u32) -> &MarshalTo {
+    unsafe fn get(&self, _index: u32) -> &dyn MarshalTo {
         mem::transmute::<&EntitiesRes, &GluonEntities>(self)
     }
 }
 
 impl Reflection for LazyUpdate {
-    fn open<'a>(&'a self, _entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a> {
+    fn open<'a>(&'a self, _entities: Fetch<'a, EntitiesRes>) -> Box<dyn ReflectionStorage + 'a> {
         Box::new(self)
     }
 }
@@ -408,7 +408,7 @@ impl<'a> ReflectionStorage for &'a LazyUpdate {
     fn mask(&self) -> Option<&BitSet> {
         None
     }
-    unsafe fn get(&self, _index: u32) -> &MarshalTo {
+    unsafe fn get(&self, _index: u32) -> &dyn MarshalTo {
         mem::transmute::<&LazyUpdate, &GluonLazyUpdate>(self)
     }
 }
@@ -417,7 +417,7 @@ impl<T> Reflection for MaskedStorage<T>
 where
     T: Component + MarshalTo + Send + Sync,
 {
-    fn open<'a>(&'a self, entities: Fetch<'a, EntitiesRes>) -> Box<ReflectionStorage + 'a> {
+    fn open<'a>(&'a self, entities: Fetch<'a, EntitiesRes>) -> Box<dyn ReflectionStorage + 'a> {
         Box::new(Storage::new(entities, self))
     }
 }
@@ -429,11 +429,11 @@ where
     fn open_mut<'a>(
         &'a mut self,
         entities: Fetch<'a, EntitiesRes>,
-    ) -> Box<ReflectionStorageMut + 'a> {
+    ) -> Box<dyn ReflectionStorageMut + 'a> {
         Box::new(Storage::new(entities, self))
     }
 
-    fn add_component(lazy: &LazyUpdate, thread: &Thread, entity: Entity, value: Variants)
+    fn add_component(lazy: &LazyUpdate, thread: &Thread, entity: Entity, value: Variants<'_>)
     where
         Self: Sized,
     {
@@ -443,7 +443,7 @@ where
 
 pub trait ReflectionStorage {
     fn mask(&self) -> Option<&BitSet>;
-    unsafe fn get(&self, index: u32) -> &MarshalTo;
+    unsafe fn get(&self, index: u32) -> &dyn MarshalTo;
 }
 
 impl<'a, T, D> ReflectionStorage for Storage<'a, T, D>
@@ -454,20 +454,20 @@ where
     fn mask(&self) -> Option<&BitSet> {
         Some(Storage::mask(self))
     }
-    unsafe fn get(&self, index: u32) -> &MarshalTo {
+    unsafe fn get(&self, index: u32) -> &dyn MarshalTo {
         self.unprotected_storage().get(index)
     }
 }
 
 pub trait ReflectionStorageMut: ReflectionStorage {
-    unsafe fn get_mut(&mut self, index: u32) -> &mut MarshalFrom;
+    unsafe fn get_mut(&mut self, index: u32) -> &mut dyn MarshalFrom;
 }
 
 impl<'a, T> ReflectionStorageMut for Storage<'a, T, &'a mut MaskedStorage<T>>
 where
     T: Component + MarshalFrom + Send + Sync,
 {
-    unsafe fn get_mut(&mut self, index: u32) -> &mut MarshalFrom {
+    unsafe fn get_mut(&mut self, index: u32) -> &mut dyn MarshalFrom {
         self.unprotected_storage_mut().get_mut(index)
     }
 }
@@ -478,8 +478,8 @@ pub trait Dropbox {}
 impl<T> Dropbox for T {}
 
 struct GluonJoin<'a> {
-    reads: &'a [Box<ReflectionStorage + 'a>],
-    proxies: Vec<Box<Dropbox + 'a>>,
+    reads: &'a [Box<dyn ReflectionStorage + 'a>],
+    proxies: Vec<Box<dyn Dropbox + 'a>>,
     thread: &'a Thread,
     fields: &'a [InternedStr],
     mask: &'a BitSet,
@@ -510,7 +510,7 @@ impl<'a> Join for GluonJoin<'a> {
     }
 }
 
-fn reflection_bitset<'a>(iter: impl IntoIterator<Item = &'a ReflectionStorage>) -> BitSet {
+fn reflection_bitset<'a>(iter: impl IntoIterator<Item = &'a dyn ReflectionStorage>) -> BitSet {
     iter.into_iter()
         .flat_map(|reflection| reflection.mask())
         .fold(None, |acc, set| {
@@ -525,8 +525,8 @@ fn reflection_bitset<'a>(iter: impl IntoIterator<Item = &'a ReflectionStorage>) 
         .unwrap_or_default()
 }
 
-struct GluonJoinMut<'a, 'e: 'a> {
-    writes: &'a mut [Box<ReflectionStorageMut + 'e>],
+struct GluonJoinMut<'a, 'e> {
+    writes: &'a mut [Box<dyn ReflectionStorageMut + 'e>],
     outputs: Vec<GluonAny>,
     mask: &'a BitSet,
 }
@@ -569,11 +569,11 @@ fn create_entity(entities: &GluonEntities) -> GluonEntity {
 }
 
 fn add_component(
-    WithVM { vm, value: lazy }: WithVM<&GluonLazyUpdate>,
+    WithVM { vm, value: lazy }: WithVM<'_, &GluonLazyUpdate>,
     reflection_table: &ReflectionTable,
     name: &str,
-    component: OpaqueRef<generic::A>,
-    entity: OpaqueRef<GluonEntity>,
+    component: OpaqueRef<'_, generic::A>,
+    entity: OpaqueRef<'_, GluonEntity>,
 ) -> RuntimeResult<(), String> {
     let entity = entity.0.clone();
     match reflection_table.add_component.get(name) {
@@ -583,7 +583,7 @@ fn add_component(
 }
 
 // necessary for `MetaTable`
-impl<T> CastFrom<T> for Reflection
+impl<T> CastFrom<T> for dyn Reflection
 where
     T: Reflection + 'static,
 {
@@ -596,7 +596,7 @@ where
     }
 }
 
-impl<T> CastFrom<T> for ReflectionMut
+impl<T> CastFrom<T> for dyn ReflectionMut
 where
     T: ReflectionMut + 'static,
 {
@@ -613,13 +613,13 @@ where
 #[gluon_trace(skip)]
 #[gluon(vm_type = "ReflectionTable")]
 struct ReflectionTable {
-    reflections: MetaTable<Reflection>,
-    reflections_mut: MetaTable<ReflectionMut>,
-    add_component: HashMap<String, fn(&LazyUpdate, &Thread, Entity, Variants)>,
+    reflections: MetaTable<dyn Reflection>,
+    reflections_mut: MetaTable<dyn ReflectionMut>,
+    add_component: HashMap<String, fn(&LazyUpdate, &Thread, Entity, Variants<'_>)>,
 }
 
 impl fmt::Debug for ReflectionTable {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ReflectionTable").finish()
     }
 }
@@ -628,7 +628,7 @@ impl ReflectionTable {
     fn register<R>(&mut self, _name: &str, r: &R)
     where
         R: Reflection + Resource + Sized,
-        Reflection: CastFrom<R>,
+        dyn Reflection: CastFrom<R>,
     {
         self.reflections.register(r);
     }
@@ -636,7 +636,7 @@ impl ReflectionTable {
     fn register_mut<R>(&mut self, name: &str, r: &R)
     where
         R: ReflectionMut + Resource + Sized,
-        ReflectionMut: CastFrom<R>,
+        dyn ReflectionMut: CastFrom<R>,
     {
         self.register(name, r);
 
@@ -677,14 +677,14 @@ impl ResourceTable {
 
 enum ReadType<'a> {
     Write(usize),
-    Read(Ref<'a, Box<Resource + 'static>>),
+    Read(Ref<'a, Box<dyn Resource + 'static>>),
 }
 
 pub struct ScriptSystemData<'a> {
     meta_table: Read<'a, ReflectionTable>,
     read_fields: Vec<InternedStr>,
     reads: Vec<ReadType<'a>>,
-    writes: Vec<RefMut<'a, Box<Resource + 'static>>>,
+    writes: Vec<RefMut<'a, Box<dyn Resource + 'static>>>,
     #[allow(unused)] // FIXME Clone this when running the system instead of re-fetching
     entities: Fetch<'a, EntitiesRes>,
     res: &'a shred::Resources,
@@ -834,7 +834,7 @@ pub fn init_resources(world: &mut shred::Resources, thread: &Thread) {
 mod tests {
     use super::*;
 
-    use specs::{Builder, DispatcherBuilder};
+    use specs::{Builder, DenseVecStorage, DispatcherBuilder};
 
     use specs_derive::Component;
 

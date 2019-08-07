@@ -144,7 +144,7 @@ impl SimpleState for Asteroids {
             .build();
     }
 
-    fn handle_event(&mut self, _: StateData<GameData>, event: StateEvent) -> SimpleTrans {
+    fn handle_event(&mut self, _: StateData<'_, GameData<'_, '_>>, event: StateEvent) -> SimpleTrans {
         if let StateEvent::Window(event) = &event {
             match event {
                 Event::WindowEvent { event, .. } => match event {
@@ -166,7 +166,7 @@ impl SimpleState for Asteroids {
         }
     }
 
-    fn fixed_update(&mut self, data: StateData<GameData>) -> SimpleTrans {
+    fn fixed_update(&mut self, data: StateData<'_, GameData<'_, '_>>) -> SimpleTrans {
         self.script_dispatcher.dispatch(&data.world.res);
         Trans::None
     }
