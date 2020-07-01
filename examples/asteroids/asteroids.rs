@@ -12,8 +12,10 @@ use amethyst::{
     },
 };
 
-use gluon_codegen::{Getable, Pushable, VmType};
-use specs_derive::Component;
+use {
+    gluon::ThreadExt,
+    gluon_codegen::{Getable, Pushable, VmType},
+};
 
 pub const ARENA_HEIGHT: f32 = 300.0;
 pub const ARENA_WIDTH: f32 = 300.0;
@@ -93,7 +95,6 @@ impl SimpleState for Asteroids {
         let world = data.world;
 
         world
-            .res
             .fetch_mut::<amethyst::core::frame_limiter::FrameLimiter>()
             .set_rate(
                 amethyst::core::frame_limiter::FrameRateLimitStrategy::SleepAndYield(
@@ -102,20 +103,20 @@ impl SimpleState for Asteroids {
                 60,
             );
 
-        gluon_specs::init_resources(&mut world.res, &self.thread);
+        gluon_specs::init_resources(world, &self.thread);
 
         world.register::<Player>();
 
         initialise_gluon(&self.thread);
-        gluon::Compiler::new()
-            .load_file(&self.thread, "component.glu")
+        self.thread
+            .load_file("component.glu")
             .unwrap_or_else(|err| panic!("{}", err));
 
         gluon_specs::register_component::<Position>(world, &self.thread, "Position");
         gluon_specs::register_component::<Motion>(world, &self.thread, "Motion");
         gluon_specs::register_component::<Rotation>(world, &self.thread, "Rotation");
-        gluon_specs::register::<Input>(&mut world.res, &self.thread, "Input");
-        world.res.entry().or_insert_with(Input::default);
+        gluon_specs::register::<Input>(world, &self.thread, "Input");
+        world.entry().or_insert_with(Input::default);
 
         initialise_camera(world);
         initialise_player(world);
@@ -131,7 +132,7 @@ impl SimpleState for Asteroids {
             .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("glu"))
         {
             let script_system =
-                gluon_specs::ScriptSystem::from_file(&self.thread, &world.res, entry.path())
+                gluon_specs::ScriptSystem::from_file(&self.thread, &world, entry.path())
                     .unwrap_or_else(|err| panic!("{}", err));
 
             dispatcher_builder.add(script_system, &entry.path().display().to_string(), &[]);
@@ -144,7 +145,11 @@ impl SimpleState for Asteroids {
             .build();
     }
 
-    fn handle_event(&mut self, _: StateData<'_, GameData<'_, '_>>, event: StateEvent) -> SimpleTrans {
+    fn handle_event(
+        &mut self,
+        _: StateData<'_, GameData<'_, '_>>,
+        event: StateEvent,
+    ) -> SimpleTrans {
         if let StateEvent::Window(event) = &event {
             match event {
                 Event::WindowEvent { event, .. } => match event {
@@ -167,7 +172,7 @@ impl SimpleState for Asteroids {
     }
 
     fn fixed_update(&mut self, data: StateData<'_, GameData<'_, '_>>) -> SimpleTrans {
-        self.script_dispatcher.dispatch(&data.world.res);
+        self.script_dispatcher.dispatch(&data.world);
         Trans::None
     }
 }

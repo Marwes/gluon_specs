@@ -7,7 +7,7 @@ use itertools::Itertools;
 
 use specs::{
     storage::{MaskedStorage, Storage, UnprotectedStorage},
-    world::EntitiesRes,
+    world::{EntitiesRes, WorldExt},
     BitSet, Component, Entity, Join, LazyUpdate,
 };
 
@@ -31,7 +31,7 @@ use gluon::{
         thread::ThreadInternal,
         ExternModule, Variants,
     },
-    RootedThread, Thread,
+    RootedThread, Thread, ThreadExt,
 };
 
 use gluon_codegen::{Trace, Userdata, VmType};
@@ -246,7 +246,7 @@ impl<'a> System<'a> for ScriptSystem {
         AccessorCow::Ref(&self.dependencies)
     }
 
-    fn setup(&mut self, _res: &mut shred::Resources) {
+    fn setup(&mut self, _res: &mut shred::World) {
         // this could call a setup function of the script
     }
 }
@@ -254,7 +254,7 @@ impl<'a> System<'a> for ScriptSystem {
 impl ScriptSystem {
     pub fn from_file<P>(
         thread: &Thread,
-        res: &shred::Resources,
+        res: &shred::World,
         filename: &P,
     ) -> Result<ScriptSystem, failure::Error>
     where
@@ -267,17 +267,17 @@ impl ScriptSystem {
 
     pub fn from_script(
         thread: &Thread,
-        res: &shred::Resources,
+        res: &shred::World,
         name: &str,
         script: &str,
     ) -> Result<ScriptSystem, failure::Error> {
-        let (function, typ) = gluon::Compiler::new().run_expr(thread, name, script)?;
+        let (function, typ) = thread.run_expr(name, script)?;
         ScriptSystem::new(thread, res, function, &typ)
     }
 
     pub fn new(
         thread: &Thread,
-        res: &shred::Resources,
+        res: &shred::World,
         function: OwnedFunction<fn(GluonAny) -> GluonAny>,
         update_type: &ArcType,
     ) -> Result<ScriptSystem, failure::Error> {
@@ -583,7 +583,7 @@ fn add_component(
 }
 
 // necessary for `MetaTable`
-impl<T> CastFrom<T> for dyn Reflection
+unsafe impl<T> CastFrom<T> for dyn Reflection
 where
     T: Reflection + 'static,
 {
@@ -596,7 +596,7 @@ where
     }
 }
 
-impl<T> CastFrom<T> for dyn ReflectionMut
+unsafe impl<T> CastFrom<T> for dyn ReflectionMut
 where
     T: ReflectionMut + 'static,
 {
@@ -687,20 +687,20 @@ pub struct ScriptSystemData<'a> {
     writes: Vec<RefMut<'a, Box<dyn Resource + 'static>>>,
     #[allow(unused)] // FIXME Clone this when running the system instead of re-fetching
     entities: Fetch<'a, EntitiesRes>,
-    res: &'a shred::Resources,
+    res: &'a shred::World,
 }
 
 impl<'a> DynamicSystemData<'a> for ScriptSystemData<'a> {
     type Accessor = Dependencies;
 
-    fn setup(_accessor: &Dependencies, _res: &mut shred::Resources) {}
+    fn setup(_accessor: &Dependencies, _res: &mut shred::World) {}
 
-    fn fetch(access: &Dependencies, res: &'a shred::Resources) -> Self {
+    fn fetch(access: &Dependencies, res: &'a shred::World) -> Self {
         let writes = access
             .writes
             .iter()
             .map(|id| {
-                res.try_fetch_internal(id.0.clone())
+                res.try_fetch_internal(id.clone())
                     .unwrap_or_else(|| {
                         panic!("bug: the requested resource does not exist: {:?}", id)
                     })
@@ -715,7 +715,7 @@ impl<'a> DynamicSystemData<'a> for ScriptSystemData<'a> {
                     ReadType::Write(i)
                 } else {
                     ReadType::Read(
-                        res.try_fetch_internal(id.0.clone())
+                        res.try_fetch_internal(id.clone())
                             .unwrap_or_else(|| {
                                 panic!("bug: the requested resource does not exist: {:?}", id)
                             })
@@ -756,8 +756,8 @@ where
     T::Storage: Default,
 {
     {
-        let mut reflection_table = world.res.fetch_mut::<ReflectionTable>();
-        let mut resource_table = world.res.fetch_mut::<ResourceTable>();
+        let mut reflection_table = world.fetch_mut::<ReflectionTable>();
+        let mut resource_table = world.fetch_mut::<ResourceTable>();
         reflection_table.register_mut(name, &specs::storage::MaskedStorage::<T>::default());
         let typ = <T as gluon::vm::api::VmType>::make_type(thread);
         resource_table.register_component::<T>(typ);
@@ -765,7 +765,7 @@ where
     world.register::<T>();
 }
 
-pub fn register<T>(world: &mut shred::Resources, thread: &gluon::Thread, name: &str)
+pub fn register<T>(world: &mut shred::World, thread: &gluon::Thread, name: &str)
 where
     T: Component + Reflection + VmType + MarshalFrom + Send + Sync + Default,
 {
@@ -792,7 +792,7 @@ macro_rules! register {
     }}
 }
 
-pub fn init_resources(world: &mut shred::Resources, thread: &Thread) {
+pub fn init_resources(world: &mut shred::World, thread: &Thread) {
     world.entry().or_insert_with(|| ReflectionTable::default());
     world.entry().or_insert_with(|| ResourceTable::new());
 
@@ -850,7 +850,7 @@ mod tests {
 
     fn test_script_sys(
         vm: &Thread,
-        res: &shred::Resources,
+        res: &shred::World,
         script: &str,
     ) -> Result<ScriptSystem, failure::Error> {
         ScriptSystem::from_script(vm, res, "test", script)

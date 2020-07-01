@@ -9,8 +9,8 @@ edition = "2018"
 [dependencies]
 # Game stuff
 itertools = "0.8"
-specs = "0.14"
-shred = "0.7"
+specs = "0.16"
+shred = "0.10"
 specs-derive = "0.4"
 
 # Utility stuff
@@ -23,6 +23,6 @@ gluon_vm = { path = "../gluon/vm" }
 gluon_codegen = { path = "../gluon/codegen" }
 
 [dev-dependencies]
-amethyst = { version = "0.12.0", default-features = false, features = ["animation", "audio", "locale", "renderer"] }
-amethyst_rendy = { version = "0.2", features = ["vulkan"]}
+amethyst = { version = "0.15.0", default-features = false, features = ["animation", "audio", "locale", "renderer"] }
+amethyst_rendy = { version = "0.5", features = ["vulkan"] }
 walkdir = "2"
